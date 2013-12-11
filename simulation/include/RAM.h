@@ -2,12 +2,15 @@
 #define RAM_H
 
 #include <Memory.h>
+#include <inttypes.h>
+
+#define ulong uint64_t
 
 
 class RAM : public Memory
 {
     public:
-        RAM(int*, int);
+        RAM(ulong*, int);
         virtual ~RAM();
         virtual int getAddress(int*);
         virtual int fetchAddress(int*);
@@ -16,7 +19,7 @@ class RAM : public Memory
     protected:
     private:
         int cost;
-        int* costVar;
+        ulong* costVar;
 };
 
 #endif // RAM_H

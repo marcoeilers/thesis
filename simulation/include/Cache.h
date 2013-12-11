@@ -4,8 +4,14 @@
 #include <Memory.h>
 #include <deque>
 #include <iostream>
+#include <inttypes.h>
 
 #define PREFETCH_LIMIT 32
+
+#ifndef ulong
+#define ulong uint64_t
+#endif
+
 
 struct CacheEntry
 {
@@ -17,7 +23,7 @@ struct CacheEntry
 class Cache : public Memory
 {
     public:
-        Cache(Memory*, int*, int, int, int);
+        Cache(Memory*, ulong*, int, int, int);
         virtual ~Cache();
         virtual int getAddress(int*);
         virtual int fetchAddress(int*);
@@ -26,7 +32,7 @@ class Cache : public Memory
     protected:
     private:
         Memory* nextLevel;
-        int* costVar;
+        ulong* costVar;
         int cost;
         int size;
         int lines;

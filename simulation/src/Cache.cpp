@@ -1,6 +1,6 @@
 #include "Cache.h"
 
-Cache::Cache(Memory* next, int* cv, int cst, int ls, int s)
+Cache::Cache(Memory* next, ulong* cv, int cst, int ls, int s)
 {
     nextLevel = next;
     costVar = cv;

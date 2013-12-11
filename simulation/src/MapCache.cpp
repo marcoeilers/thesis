@@ -1,6 +1,6 @@
 #include "MapCache.h"
 
-MapCache::MapCache(Memory* next, int* cv, int cst, int ls, int s)
+MapCache::MapCache(Memory* next, ulong* cv, int cst, int ls, int s)
 {
     nextLevel = next;
     costVar = cv;

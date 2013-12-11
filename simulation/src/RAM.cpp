@@ -1,6 +1,6 @@
 #include "RAM.h"
 
-RAM::RAM(int* cv, int c)
+RAM::RAM(ulong* cv, int c)
 {
     costVar = cv;
     cost = c;

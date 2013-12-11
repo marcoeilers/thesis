@@ -8,12 +8,13 @@
 
 #define PREFETCH_LIMIT 32
 
+#define ulong unsigned long
 
 
 class MapCache : public Memory
 {
     public:
-        MapCache(Memory*, int*, int, int, int);
+        MapCache(Memory*, ulong*, int, int, int);
         virtual ~MapCache();
         virtual int getAddress(int*);
         virtual int fetchAddress(int*);
@@ -24,7 +25,7 @@ class MapCache : public Memory
     protected:
     private:
         Memory* nextLevel;
-        int* costVar;
+        ulong* costVar;
         int cost;
         int size;
         int lines;

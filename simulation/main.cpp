@@ -3,14 +3,20 @@
 #include <assert.h>
 #include <bitset>
 #include "Cache.h"
-#include "MapCache.h"
+#include "AssocCache.h"
 #include "RAM.h"
 #include <sys/time.h>
+#include <inttypes.h>
+#include <iomanip>
 
 
 using namespace std;
 
 #define SIMULATE
+
+#define NO_RUNS 4
+#define MIN_EXP 20
+#define MAX_EXP 24
 
 #ifdef SIMULATE
 #define COPY(A, B) mem->copy(&A, &B)
@@ -26,13 +32,13 @@ using namespace std;
 #define DECR(A) --A
 #endif
 
-#define NO_BITS 8
+#define NO_BITS 7
 
 #define ONE_BITS ((1 << NO_BITS) - 1)
 #define ByteOf(x) (((x) >> bitsOffset) & ONE_BITS)
 #define BteOf(x, y) (((x) >> y) & ONE_BITS)
 
-int totalCost;
+uint64_t totalCost;
 
 static void getCounts(int runs, int startRun, int counts[][1 << NO_BITS], Memory* mem, int size, int *values)
 {
@@ -131,12 +137,14 @@ void getValuesFromSorted(Memory* mem, int* dest, int counts[][1 << NO_BITS], int
     }
 }
 
-void sortGather(Memory* mem, int *values, int *indices, int *result, int *temp1, int *temp2, int *temp3, int size)
+void sortGather(Memory* mem, int *values, int *indices, int *result, int *temp1, int *temp2, int *temp3, int size, int exponent)
 {
-    int runs = 2;
+    int runs = exponent / NO_BITS;
+    cout << runs << " runs \n";
     int counts[2 * runs][1 << NO_BITS];
 
     getCounts(runs, 1, counts, mem, size, indices);
+//    printAll("counts 0", counts[0], 1 << NO_BITS);
 
     // sort
     for (int i = 0; i < runs; i++)
@@ -162,14 +170,17 @@ void sortGather(Memory* mem, int *values, int *indices, int *result, int *temp1,
 
 int main()
 {
-    totalCost = 0;
-    RAM* ram = new RAM(&totalCost, 138);
-    MapCache* l2 = new MapCache(ram, &totalCost, 11, 4096 * 1024 * 8 / (64 * 8), 4096 * 1024 * 8);
-    MapCache* l1 = new MapCache(l2, &totalCost, 3, 32 * 1024 * 8 / (64 * 8), 32 * 1024 * 8);
+    RAM* ram = new RAM(&totalCost, 240);
+    AssocCache<32768, 16>* l2 = new AssocCache<32768, 16>(ram, &totalCost, 35, 2048 * 1024 * 8 / (64 * 8), 4096 * 1024 * 8);
+    AssocCache<512, 8>* l1 = new AssocCache<512, 8>(l2, &totalCost, 2, 32 * 1024 * 8 / (64 * 8), 32 * 1024 * 8);
 
 
 //for (int power = 8; power < 17; power++){
-    int size = 1 << 24;
+    //int exponent = 26;
+    for (int exponent = MIN_EXP; exponent <= MAX_EXP; exponent++)
+{
+    totalCost = 0;
+    int size = 1 << exponent;
     int* values = (int*) calloc(size, sizeof(int));
     int* indices = (int*) calloc(size, sizeof(int));
     int* temp1 = (int*) calloc(size, sizeof(int));
@@ -177,6 +188,7 @@ int main()
     int* temp3 = (int*) calloc(size, sizeof(int));
     int* result1 = (int*) calloc(size, sizeof(int));
     int* result2 = (int*) calloc(size, sizeof(int));
+
 /*
     // test cache
     Memory* mem = l1;
@@ -201,35 +213,56 @@ int main()
     {
         values[i] = rand() % 100;
         indices[i] = rand() % size;
+        temp1[i] = 15;
+        temp2[i] = 15;
+        temp3[i] = 15;
+        result1[i] = 15;
+        result2[i] = 15;
     }
 
 //    printAll("indices", indices, size, true);
     timeval before, between, after;
     gettimeofday(&before, NULL);
+    int runs = 4;
+    for (int i = 0; i < NO_RUNS; i++)
+{
+/*        int counts[2 * runs][1 << NO_BITS];
+
+        getCounts(runs, 1, counts, l1, size, indices);
+
+        // sort
+        for (int i = 0; i < runs; i++)
+            radix(counts, l1, i, (i+1) * NO_BITS, size, i == 0 ? indices : i == 1 ? temp1 : temp2, i == 0 ? temp1 : i == 1 ? temp2 : temp3);
+*/
+
     simpleGather(l1, values, indices, result1, size);
+}
     float simpleMiss1 = l1->missPercentage();
     float simpleMiss2 = l2->missPercentage();
     l1->resetStatistics();
     l2->resetStatistics();
-    int time = totalCost;
+    uint64_t time = totalCost;
     gettimeofday(&between, NULL);
-    sortGather(l1, values, indices, result2, temp1, temp2, temp3, size);
+    for (int i = 0; i < NO_RUNS; i++)
+        sortGather(l1, values, indices, result2, temp1, temp2, temp3, size, exponent);
     gettimeofday(&after, NULL);
-    int time2 = totalCost - time;
+    uint64_t time2 = totalCost - time;
     float sortMiss1 = l1->missPercentage();
     float sortMiss2 = l2->missPercentage();
 
 
-    for (int i = 0; i < size; i++)
-        assert(result1[i] == result2[i]);
+//    for (int i = 0; i < size; i++)
+//        assert(result1[i] == result2[i]);
 
 #ifdef SIMULATE
-    cout << size << "\tsimpleGather\t" << time  << "\t" << simpleMiss1 << "\t" << simpleMiss2 << "\tsortGather\t" << time2 << "\t" << sortMiss1 << "\t" << sortMiss2 << "\n";
+    cout << size << "\tsimpleGather\t" << time / NO_RUNS << "\t" << simpleMiss1 << "\t" << simpleMiss2 << "\tsortGather\t" << time2 / NO_RUNS << "\t" << sortMiss1 << "\t" << sortMiss2 << "\n";
 #else
-    float simpleTime = (between.tv_sec - before.tv_sec) * 1e6 + (between.tv_usec - before.tv_usec) * 1e-3;
-    float sortTime = (after.tv_sec - between.tv_sec) * 1e6 + (after.tv_usec - between.tv_usec) * 1e-3;
+    float simpleTime = ((between.tv_sec - before.tv_sec) * 1e9 + (between.tv_usec - before.tv_usec) * 1e3) / NO_RUNS;
+    float sortTime = (1e9 * (after.tv_sec - between.tv_sec) + 1e3 * (after.tv_usec - between.tv_usec)) / NO_RUNS;
+    cout << before.tv_sec << " " << between.tv_sec << " " << after.tv_sec << "\n";
+    cout << before.tv_usec << " " << between.tv_usec << " " << after.tv_usec << "\n";
 
-    cout << size << "\tsimpleGather\t" << simpleTime<<  "\tsortGather\t" << sortTime << "\n";
+    cout << size << "\tsimpleGather\t" << fixed << setprecision(3) << simpleTime<<  "\tsortGather\t" << sortTime << "\n";
 #endif
 
     free(indices);
@@ -239,8 +272,9 @@ int main()
     free(temp3);
     free(result1);
     free(result2);
+}
 
-//}
+
 
     return 0;
 }
