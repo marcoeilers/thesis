@@ -1,7 +1,9 @@
 #include <iostream>
 #include <stdlib.h>
+#include <stdio.h>
 #include <assert.h>
 #include <bitset>
+#include <cmath>
 #include "Cache.h"
 #include "AssocCache.h"
 #include "RAM.h"
@@ -12,11 +14,11 @@
 
 using namespace std;
 
-#define SIMULATE
+//#define SIMULATE
 
 #define NO_RUNS 4
 #define MIN_EXP 20
-#define MAX_EXP 24
+#define MAX_EXP 26
 
 #ifdef SIMULATE
 #define COPY(A, B) mem->copy(&A, &B)
@@ -32,7 +34,7 @@ using namespace std;
 #define DECR(A) --A
 #endif
 
-#define NO_BITS 7
+#define NO_BITS 8
 
 #define ONE_BITS ((1 << NO_BITS) - 1)
 #define ByteOf(x) (((x) >> bitsOffset) & ONE_BITS)
@@ -107,6 +109,39 @@ void simpleGather(Memory* mem, int *values, int *indices, int *result, int size)
     }
 }
 
+void byteGather(Memory* mem, int *values, int *indices, int *result, int size)
+{
+    for (int i = 0; i < size; i++)
+    {
+        int index = GET(indices[i]);
+        char value = GET(*((char*)(&values[index])));
+        STORE(result[i], value);
+    }
+}
+
+void noPipeGather(Memory* mem, int *values, int *indices, int *result, int size)
+{
+    int old = 0;
+    for (int i = 0; i < size; i++)
+    {
+        int index = GET(indices[i]);
+        int value = GET(values[index + old - 1]);
+        STORE(result[i], value);
+        old = value;
+    }
+}
+
+void simpleScatter(Memory* mem, int *values, int *indices, int *result, int size)
+{
+    for (int i = 0; i < size; i++)
+    {
+        int index = GET(indices[i]);
+        //int value = GET(values[i]);
+        int curVal = GET(result[index]);
+        STORE(result[index], 1 + curVal);
+    }
+}
+
 void printAll(std::string title, int* data, int size, bool bin = false)
 {
     cout << title << "\n";
@@ -139,17 +174,21 @@ void getValuesFromSorted(Memory* mem, int* dest, int counts[][1 << NO_BITS], int
 
 void sortGather(Memory* mem, int *values, int *indices, int *result, int *temp1, int *temp2, int *temp3, int size, int exponent)
 {
-    int runs = exponent / NO_BITS;
-    cout << runs << " runs \n";
+    int runs = 1; //exponent / NO_BITS;
+//    cout << runs << " runs \n";
     int counts[2 * runs][1 << NO_BITS];
 
     getCounts(runs, 1, counts, mem, size, indices);
 //    printAll("counts 0", counts[0], 1 << NO_BITS);
-
+    int po2 = 1;
+    while ( 1 << po2 < size)
+        po2++;
+//    printf("po2 %i\n", po2);
+    int offset = po2 - NO_BITS + 1;
     // sort
-    for (int i = 0; i < runs; i++)
-        radix(counts, mem, i, (i+1) * NO_BITS, size, i == 0 ? indices : i == 1 ? temp1 : temp2, i == 0 ? temp1 : i == 1 ? temp2 : temp3);
-
+//    for (int i = 0; i < runs; i++)
+//        radix(counts, mem, i, (i+1) * NO_BITS, size, i == 0 ? indices : i == 1 ? temp1 : temp2, i == 0 ? temp1 : i == 1 ? temp2 : temp3);
+    radix(counts, mem, 0, offset, size, indices, temp1);
 
     // get values
     for (int i = 0; i < size; i++)
@@ -167,6 +206,11 @@ void sortGather(Memory* mem, int *values, int *indices, int *result, int *temp1,
 
 }
 
+void sortScatter(Memory* mem, int *values, int *indices, int *result, int *temp1, int *temp2, int *temp3, int size, int exponent)
+{
+
+}
+
 
 int main()
 {
@@ -179,6 +223,7 @@ int main()
     //int exponent = 26;
     for (int exponent = MIN_EXP; exponent <= MAX_EXP; exponent++)
 {
+//    printf("exp %i\n", exponent);
     totalCost = 0;
     int size = 1 << exponent;
     int* values = (int*) calloc(size, sizeof(int));
@@ -211,7 +256,7 @@ int main()
 
     for (int i = 0; i < size; i++)
     {
-        values[i] = rand() % 100;
+        values[i] = 1;
         indices[i] = rand() % size;
         temp1[i] = 15;
         temp2[i] = 15;
@@ -259,10 +304,10 @@ int main()
 #else
     float simpleTime = ((between.tv_sec - before.tv_sec) * 1e9 + (between.tv_usec - before.tv_usec) * 1e3) / NO_RUNS;
     float sortTime = (1e9 * (after.tv_sec - between.tv_sec) + 1e3 * (after.tv_usec - between.tv_usec)) / NO_RUNS;
-    cout << before.tv_sec << " " << between.tv_sec << " " << after.tv_sec << "\n";
-    cout << before.tv_usec << " " << between.tv_usec << " " << after.tv_usec << "\n";
+//    cout << before.tv_sec << " " << between.tv_sec << " " << after.tv_sec << "\n";
+//    cout << before.tv_usec << " " << between.tv_usec << " " << after.tv_usec << "\n";
 
-    cout << size << "\tsimpleGather\t" << fixed << setprecision(3) << simpleTime<<  "\tsortGather\t" << sortTime << "\n";
+    cout << size << "\tsimpleGather\t" << fixed << setprecision(3) << (simpleTime / size) <<  "\tsortGather\t" << (sortTime / size) << "\n";
 #endif
 
     free(indices);
