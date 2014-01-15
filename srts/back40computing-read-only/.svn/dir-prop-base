@@ -1,0 +1,20 @@
+K 14
+subclipse:tags
+V 113
+1,branches,/branches,branch
+443,MultiGPU,/branches/MultiGPU,branch
+669,FastSortSm20,/branches/FastSortSm20,branch
+K 10
+svn:ignore
+V 19
+.cproject
+.project
+
+K 13
+svn:mergeinfo
+V 90
+/branches/BFS:753-764
+/branches/MultiGPU:444-525
+/branches/Refactor:744-747
+/trunk:670-802
+END
