@@ -126,7 +126,7 @@ int main()
         for (int i = 0; i < num_elements; ++i)
         {
                 h_keys[i] = rand() % num_elements;
-                h_values[i] = rand();
+                h_values[i] = i;
         }
 	std::pair<timeval, timeval> result;
 	result = sortScatter<START, BITS>(h_keys, h_values, h_result, num_elements, false);

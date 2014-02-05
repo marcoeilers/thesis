@@ -37,8 +37,8 @@ struct Foo
 	int a[5];
 };
 
-template<int START_BIT, int NO_BITS>
-void doSort(int*, int*, int, bool);
+template<typename ValueType, int START_BIT, int NO_BITS>
+void doSort(int*, ValueType*, int, bool);
 
 /******************************************************************************
  * Main
@@ -47,7 +47,7 @@ void doSort(int*, int*, int, bool);
 int main(int argc, char** argv)
 {
 	typedef int KeyType;
-	typedef int ValueType;
+	typedef double ValueType;
 
     unsigned int num_elements = 1 << 26;
 
@@ -62,21 +62,20 @@ int main(int argc, char** argv)
 	for (int i = 0; i < num_elements; ++i)
 	{
 		b40c::util::RandomBits(h_keys[i]);
-		h_values[i] = i;
+		h_values[i] = 1.0;
 //		h_reference_keys[i] = h_keys[i];
 	}
 
-	doSort<0, sizeof(int)>(h_keys, h_values, num_elements, false);
+	doSort<ValueType, 0, sizeof(int)>(h_keys, h_values, num_elements, false);
 
 	delete(h_keys);
 	delete(h_values);
 }
 
-template<int START_BIT, int NO_BITS>
-void doSort(int *h_keys, int *h_values, int num_elements, bool keys_only)
+template<typename ValueType, int START_BIT, int NO_BITS>
+void doSort(int *h_keys, ValueType *h_values, int num_elements, bool keys_only)
 {
 	typedef int KeyType;
-	typedef int ValueType;
 	
 	// Allocate device data. (We will let the sorting enactor create
 	// the "pong" storage if/when necessary.)
@@ -104,8 +103,8 @@ void doSort(int *h_keys, int *h_values, int num_elements, bool keys_only)
 		cudaMalloc((void**) &double_buffer.d_keys[double_buffer.selector ^ 1], sizeof(KeyType) * num_elements);
 
 		// Sort
-//		enactor.Sort(double_buffer, num_elements);
-		enactor.OneRunSort<START_BIT, NO_BITS>(double_buffer, num_elements);
+		enactor.Sort(double_buffer, num_elements);
+//		enactor.OneRunSort<START_BIT, NO_BITS>(double_buffer, num_elements);
 
 		// Check keys answer
 		printf("Simple keys-only sort:\n\n");
@@ -130,7 +129,7 @@ void doSort(int *h_keys, int *h_values, int num_elements, bool keys_only)
 
 		// Sort
 		enactor.Sort(double_buffer, num_elements);
-		enactor.OneRunSort<START_BIT, NO_BITS>(double_buffer, num_elements);
+//		enactor.OneRunSort<START_BIT, NO_BITS>(double_buffer, num_elements);
 //printf("doing the oneRunSort call\n");
 		// Check keys answer
 		printf("Simple key-value sort:\n\n: ");

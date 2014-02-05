@@ -4,15 +4,14 @@
 #include <b40c/util/multi_buffer.cuh>
 #include <sys/time.h>
 
-template<int START_BIT, int NO_BITS>
-int* doSortDevice(int *d_keys, int *d_values, int num_elements, bool keys_only);
+template<typename ValueType, int START_BIT, int NO_BITS>
+int* doSortDevice(int *d_keys, ValueType *d_values, int num_elements, bool keys_only);
 
 
-template<int START_BIT, int NO_BITS>
-timeval doSort(int *h_keys, int *h_values, int num_elements, bool keys_only)
+template<typename ValueType, int START_BIT, int NO_BITS>
+timeval doSort(int *h_keys, ValueType *h_values, int num_elements, bool keys_only)
 {
 	typedef int KeyType;
-	typedef int ValueType;
 	
 	// Allocate device data. (We will let the sorting enactor create
 	// the "pong" storage if/when necessary.)
@@ -32,7 +31,7 @@ timeval doSort(int *h_keys, int *h_values, int num_elements, bool keys_only)
 	
 	gettimeofday(&before, NULL);
 
-	int *valuesPtr = doSortDevice<START_BIT, NO_BITS>(d_keys, d_values, num_elements, keys_only);
+	int *valuesPtr = doSortDevice<ValueType, START_BIT, NO_BITS>(d_keys, d_values, num_elements, keys_only);
 
 	gettimeofday(&after, NULL);
 
@@ -51,11 +50,10 @@ timeval doSort(int *h_keys, int *h_values, int num_elements, bool keys_only)
 	return result;
 }
 
-template<int START_BIT, int NO_BITS>
-int* doSortDevice(int *d_keys, int *d_values, int num_elements, bool keys_only)
+template<typename ValueType, int START_BIT, int NO_BITS>
+int* doSortDevice(int *d_keys, ValueType *d_values, int num_elements, bool keys_only)
 {
 	typedef int KeyType;
-	typedef int ValueType;
 
 	// Create a reusable sorting enactor
 	b40c::radix_sort::Enactor enactor;

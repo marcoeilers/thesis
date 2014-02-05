@@ -38,7 +38,7 @@ GEN_SM13 = -gencode=arch=compute_13,code=\"sm_13,compute_13\"
 GEN_SM11 = -gencode=arch=compute_11,code=\"sm_11,compute_11\" 
 GEN_SM10 = -gencode=arch=compute_10,code=\"sm_10,compute_10\" 
 #SM_TARGETS = $(GEN_SM20) $(GEN_SM13) $(GEN_SM10)
-SM_TARGETS = $(GEN_SM20)
+SM_TARGETS = $(GEN_SM30)
 
 #-------------------------------------------------------------------------------
 # Tune arch
@@ -111,7 +111,6 @@ endif
 
 ifneq ($(abi), 1)
 	# Disable the ABI by default for 3.1+
-	NVCCFLAGS += -Xptxas -abi=no
 endif
 
 ifeq ($(verbose), 1)
@@ -199,6 +198,12 @@ hist: bin/hist_sort_$(NVCC_VERSION)_$(ARCH_SUFFIX)
 bin/hist_sort_$(NVCC_VERSION)_$(ARCH_SUFFIX) : histogram.cu $(DEPS)
 	mkdir -p bin
 	$(NVCC) $(DEFINES) $(SM_TARGETS) -o bin/hist_sort_$(NVCC_VERSION)_$(ARCH_SUFFIX) histogram.cu scatterKernel.cu $(NVCCFLAGS) $(ARCH) $(INC) -O3 -lcuda
+
+ms: bin/ms_$(NVCC_VERSION)_$(ARCH_SUFFIX)
+
+bin/ms_$(NVCC_VERSION)_$(ARCH_SUFFIX) : multiScan.cu $(DEPS)
+	mkdir -p bin
+	$(NVCC) $(DEFINES) $(SM_TARGETS) -o bin/ms_$(NVCC_VERSION)_$(ARCH_SUFFIX) multiScan.cu scatterKernel.cu $(NVCCFLAGS) $(ARCH) $(INC) -O3 -lcuda
 
 
 #-------------------------------------------------------------------------------

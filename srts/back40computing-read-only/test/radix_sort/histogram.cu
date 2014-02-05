@@ -3,8 +3,8 @@
 #include <scatterKernel.cuh>
            
 
-#define BIN_EXP 12
-#define BITS 2
+#define BIN_EXP 8
+#define BITS 0
 #define EXP 26
 #define START (BIN_EXP - BITS)
 
@@ -124,6 +124,13 @@ printf("error after scatter %i\n", cudaGetLastError());
 	return result;
 }
 
+int selfsimilar(int N, double h) 
+{
+return (1 + (int) 
+	(N * 
+		pow( (rand() / RAND_MAX), log(h)/log(1.0-h) ) ));
+}
+
 int main()
 {
 	printf("rand max is %i\n", RAND_MAX);
@@ -137,12 +144,21 @@ int main()
 	KeyType *h_keys = new KeyType[num_elements];
 	int *h_result = new int[1<<BIN_EXP];
 	int *ref_result = new int[1 << BIN_EXP];
+	int *indices = new int[1 << BIN_EXP];
+
+	int index = rand() % (1 << BIN_EXP);
+	for (int i = 0; i < (1 << BIN_EXP); i++)
+	{
+		indices[i] = rand() % (1 << BIN_EXP);
+	}
         // Initialize host problem data
 
         for (int i = 0; i < num_elements; ++i)
         {
-                h_keys[i] = rand() % (1 << BIN_EXP);
-        }
+              h_keys[i] = rand() % (1 << BIN_EXP);
+//		h_keys[i] = indices[selfsimilar(1 << BIN_EXP, 0.2)];
+//		h_keys[i] = index;
+       }
 
 	for (int i = 0; i < (1 << BIN_EXP); i++)
 	{

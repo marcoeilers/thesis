@@ -1,6 +1,6 @@
 #include "scatterKernel.cuh"
-
-#include "stdio.h"
+#include <assert.h>
+#include <stdio.h>
 
 void gather(int *indices, int *values, int *result, int num_elements)
 {
@@ -56,6 +56,31 @@ __global__ void scatterKernel(int *indices, int *values, int *result, int num_el
 		indStart += threadspb;
 	}
 }
+
+__global__ void scatterValIndexKernel(valIndex *values, int *result, int todob)
+{
+__shared__ int nextValIndices[256];
+
+        int offset = (blockIdx.x * todob);
+
+        int *valStart = (int*) (values + offset);
+	int *valEnd = valStart + todob * 2;
+
+        while (valStart != valEnd)
+        {
+                nextValIndices[threadIdx.x] = valStart[threadIdx.x];
+		nextValIndices[threadIdx.x + blockDim.x] = valStart[threadIdx.x + blockDim.x];
+		__syncthreads();
+                int curInd = nextValIndices[threadIdx.x * 2 + 1];
+		int curVal = nextValIndices[threadIdx.x * 2];
+
+                result[curInd] = curVal;
+
+                valStart += blockDim.x * 2;
+		__syncthreads();
+        }
+}
+
 
 
 __global__ void multiReduceKernel(int *indices, int *values, int *result, int num_elements)
@@ -217,6 +242,24 @@ cudaFuncSetCacheConfig(scatterKernel, cudaFuncCachePreferL1);
 
 scatterKernel<<<dimGrid, dimBlock>>>(indices, values, result, num_elements);
 }
+
+void scatterValIndex(valIndex *values, int *result, int num_elements)
+{
+int threadspb = 128;
+int blocks = num_elements / 1024;
+blocks = blocks > 0 ? blocks : 1;
+
+int todopb = num_elements / blocks;
+
+dim3 dimBlock(threadspb, 1);
+dim3 dimGrid(blocks, 1);
+
+cudaFuncSetCacheConfig(scatterKernel, cudaFuncCachePreferL1);
+
+scatterValIndexKernel<<<dimGrid, dimBlock>>>(values, result, todopb);
+}
+
+
 
 void multiReduce(int *indices, int *values, int *result, int num_elements)
 {

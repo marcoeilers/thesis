@@ -191,6 +191,8 @@ struct Cta
 
 			if (FULL_TILE || (tile_element < guarded_elements))
 			{
+//if (threadIdx.x == 1)
+//  printf("firstScatterGlobal\t%i\t%i\t%i\t%i\t%i\t%i\n",items[COUNT], COUNT, threadIdx.x, COUNT*CTA_THREADS, digit_offsets[COUNT], threadIdx.x + (COUNT * CTA_THREADS) + digit_offsets[COUNT]);
 				util::io::ModifiedStore<STORE_MODIFIER>::St(items[COUNT], scatter);
 			}
 
@@ -213,7 +215,7 @@ struct Cta
 		{
 			// Scatter if not out-of-bounds
 			T* scatter = d_out + ranks[COUNT] + digit_offsets[COUNT];
-
+//printf("%i\t%i\t%i\t%i\n", items[COUNT], COUNT, ranks[COUNT], digit_offsets[COUNT]);
 			if (FULL_TILE || (ranks[COUNT] < guarded_elements))
 			{
 				util::io::ModifiedStore<STORE_MODIFIER>::St(items[COUNT], scatter);
@@ -358,6 +360,8 @@ struct Cta
 					util::SHR_ADD(offset, LOG_MEM_BANKS, offset);
 			}
 
+//if (threadIdx.x == 1)
+//  printf("%i\t%i\t%i\t%i\n", items[KEY], KEY, offset, ranks[KEY]);
 			buffer[offset] = items[KEY];
 		}
 	}
@@ -379,7 +383,8 @@ struct Cta
 					(KEY * CTA_THREADS) +
 					((KEY * CTA_THREADS) >> LOG_MEM_BANKS)) :
 				(threadIdx.x + (KEY * CTA_THREADS));
-
+//if (threadIdx.x == 1)
+//	printf("%i\t%i\t%i\n", KEY, gather_offset, buffer[gather_offset]);
 			items[KEY] = buffer[gather_offset];
 		}
 	}
@@ -446,6 +451,31 @@ struct Cta
 			}
 		}
 	}
+
+
+/**
+         * Load tile of values from global memory
+         */
+        template <bool FULL_TILE>
+        __device__ __forceinline__ void LoadValues2(
+                ValueType               values[KEYS_PER_THREAD],
+                SizeT                   tex_offset,
+                const SizeT     &guarded_elements)
+        {
+                        #pragma unroll
+                        for (int KEY = 0; KEY < KEYS_PER_THREAD; KEY++)
+                        {
+                                int thread_offset = (threadIdx.x * KEYS_PER_THREAD) + KEY;
+
+                                if (thread_offset < guarded_elements)
+                                {
+//if (threadIdx.x == 1 && current_bit == 0)
+//printf("%i\t%i\n", *(d_in_values + (tex_offset * ELEMENTS_PER_TEX) + thread_offset), (tex_offset * ELEMENTS_PER_TEX) + thread_offset);       
+		                       values[KEY] = *(d_in_values + (tex_offset * ELEMENTS_PER_TEX) + thread_offset);
+                                }
+                        }
+	}
+
 
 
 	/**
@@ -586,10 +616,11 @@ struct Cta
 		SizeT 			guarded_elements)
 	{
 		// Load tile of values
-		LoadValues<FULL_TILE>(values, tex_offset, guarded_elements);
+		LoadValues2<FULL_TILE>(values, tex_offset, guarded_elements);
 
 		if (SCATTER_STRATEGY == SCATTER_DIRECT)
 		{
+//printf("value strategy direct\n");
 			// Scatter values directly to global memory
 			Iterate<0, KEYS_PER_THREAD>::template ScatterGlobal<FULL_TILE>(
 				values,
@@ -600,6 +631,7 @@ struct Cta
 		}
 		else if (SCATTER_STRATEGY == SCATTER_WARP_TWO_PHASE)
 		{
+//printf("value strategy warp two\n");
 			__syncthreads();
 
 			// Exchange values through shared memory for better write-coalescing
@@ -615,7 +647,9 @@ struct Cta
 				guarded_elements);
 		}
 		else
+
 		{
+//printf("value strategy else\n");
 			__syncthreads();
 
 			// Exchange values through shared memory for better write-coalescing
