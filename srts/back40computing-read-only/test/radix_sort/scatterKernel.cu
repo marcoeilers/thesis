@@ -105,6 +105,8 @@ __global__ void multiReduceKernel(int *indices, int *values, int *result, int nu
                 int curVal = *valStart;
                 int curInd = *indStart;
 
+//		if(curInd != 0 || curVal != 1)
+//			printf("current index and value %u %i %i \n", (valStart - values), curInd, curVal);
                 atomicAdd(&result[curInd], curVal);
 
                 valStart += threadspb;
@@ -269,7 +271,7 @@ int blocks = 8 * 16;
 dim3 dimBlock(threadspb, 1);
 dim3 dimGrid(blocks, 1);
 
-cudaFuncSetCacheConfig(scatterKernel, cudaFuncCachePreferL1);
+cudaFuncSetCacheConfig(multiReduceKernel, cudaFuncCachePreferL1);
 
 multiReduceKernel<<<dimGrid, dimBlock>>>(indices, values, result, num_elements);
 }
@@ -282,7 +284,7 @@ int blocks = 8 * 16;
 dim3 dimBlock(threadspb, 1);
 dim3 dimGrid(blocks, 1);
 
-cudaFuncSetCacheConfig(scatterKernel, cudaFuncCachePreferL1);
+cudaFuncSetCacheConfig(histKernel, cudaFuncCachePreferL1);
 
 histKernel<<<dimGrid, dimBlock>>>(indices, result, num_elements);
 }

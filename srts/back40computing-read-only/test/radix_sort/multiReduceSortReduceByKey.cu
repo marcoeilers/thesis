@@ -1,11 +1,12 @@
 #include <part_sort.cuh>
 #include <sys/time.h>
-#include <scatterKernel.cuh>
+#include "kernels/reducebykey.cuh"
 
+using namespace mgpu;
+
+#define PREPROCESS true
 #define BIN_BITS 16           
-#define BITS 6
 #define EXP 26
-#define START (BIN_BITS - BITS)
 #define BUCKETS (1 << BIN_BITS)
 
 void printDeviceArrays(int *d_array1, int *d_array2, int length)
@@ -35,7 +36,37 @@ void cpuMR(int *keys, int *values, int *result, int num_elements)
 		result[keys[i]] += values[i]; 
 }
 
-template<int START_BIT, int NO_BITS>
+template<typename KeyType, typename ValType>
+void simpleReduceByKey(CudaContext& context, KeyType *indices, ValType *values, ValType *result, int num_elements, int buckets, bool preprocess)
+{
+//	MGPU_MEM(int) countsDevice = context.Malloc<int>(1);
+
+	std::auto_ptr<ReduceByKeyPreprocessData> preprocessData;
+	int numSegments;
+//	if(preprocess) {
+		ReduceByKeyPreprocess<ValType>(num_elements, indices, 
+			(KeyType*)0, mgpu::equal_to<KeyType>(),
+			&numSegments, (int*)0, &preprocessData, context);
+//	}
+
+//	context.Start();
+	
+//	if(preprocess) {
+		ReduceByKeyApply(*preprocessData, values, (ValType)0, 
+			mgpu::plus<ValType>(), result, context);
+/*	} else {
+		ReduceByKey(indices, values, num_elements, (ValType)0,
+			mgpu::plus<ValType>(), mgpu::equal_to<ValType>(),
+			(KeyType*)0, result,
+			(int*)0, 
+			countsDevice->get(), context);
+	}
+*/
+//	if(!preprocess)
+//		copyDtoH(buckets, countsDevice->get(), 1);
+}
+
+
 std::pair<timeval, timeval> sortMR(int *h_keys, int *h_values, int *h_result, int num_elements)
 {
 	typedef int KeyType;
@@ -58,9 +89,6 @@ std::pair<timeval, timeval> sortMR(int *h_keys, int *h_values, int *h_result, in
 	gettimeofday(&before, NULL);
 
 
-
-//++++++ doSortDevice
-
 	// Create a reusable sorting enactor
 	b40c::radix_sort::Enactor enactor;
 
@@ -77,11 +105,10 @@ std::pair<timeval, timeval> sortMR(int *h_keys, int *h_values, int *h_result, in
 
 	// Sort
 //	enactor.Sort(double_buffer, num_elements);
-	enactor.OneRunSort<START_BIT, NO_BITS>(double_buffer, num_elements);
+	enactor.OneRunSort<0, BIN_BITS>(double_buffer, num_elements);
 
 
 	cudaThreadSynchronize();
-//printf("error after sort %i\n", cudaGetLastError());
 
         gettimeofday(&between, NULL);
 
@@ -89,11 +116,10 @@ std::pair<timeval, timeval> sortMR(int *h_keys, int *h_values, int *h_result, in
 //	printDeviceArrays(d_keys, double_buffer.d_values[double_buffer.selector], 50);	
 
         cudaMalloc((void**) &d_result, sizeof(int) * BUCKETS);
-	cudaMemset(d_result, 0, sizeof(int) * BUCKETS);
+	ContextPtr contextPtr = CreateCudaDevice(0, NULL, false);
+	
+	simpleReduceByKey<KeyType, ValueType>(*contextPtr, d_keys, double_buffer.d_values[double_buffer.selector], d_result, num_elements, BUCKETS, PREPROCESS);
 
-//printf("error after malloc %i\n", cudaGetLastError());
-        multiReduce(d_keys, double_buffer.d_values[double_buffer.selector], d_result, num_elements);
-//printf("error after scatter %i\n", cudaGetLastError());
         cudaThreadSynchronize();
         gettimeofday(&after, NULL);
 
@@ -149,7 +175,7 @@ int main()
 //		printf("original key value %i %i %i\n", i, h_keys[i], h_values[i]);
         }
 	std::pair<timeval, timeval> result;
-	result = sortMR<START, BITS>(h_keys, h_values, h_result, num_elements);
+	result = sortMR(h_keys, h_values, h_result, num_elements);
 	
 	cpuMR(h_keys, h_values, result_cpu, num_elements);
 
@@ -170,7 +196,7 @@ int main()
 
 	float time1 = result.first.tv_sec * 1e9 + result.first.tv_usec * 1e3;
 	float time2 = result.second.tv_sec * 1e9 + result.second.tv_usec * 1e3;
-	printf("%i\t%i\t%f\t%f\t%f\n", num_elements, BITS, time1 / num_elements, time2 / num_elements, (time1 + time2) / num_elements);
+	printf("%i\t%f\t%f\t%f\n", num_elements, time1 / num_elements, time2 / num_elements, (time1 + time2) / num_elements);
 
 	delete(result_cpu);
 	delete(h_keys);

@@ -181,11 +181,18 @@ bin/bench_$(NVCC_VERSION)_$(ARCH_SUFFIX) : thrustSortScatter.cu $(DEPS)
 	mkdir -p bin
 	$(NVCC) $(DEFINES) $(SM_TARGETS) -o bin/bench_$(NVCC_VERSION)_$(ARCH_SUFFIX) thrustSortScatter.cu $(NVCCFLAGS) $(ARCH) $(INC) -O3 -lcuda 
 
-part: bin/part_sort_$(NVCC_VERSION)_$(ARCH_SUFFIX)
+mr: bin/mr_$(NVCC_VERSION)_$(ARCH_SUFFIX)
 
-bin/part_sort_$(NVCC_VERSION)_$(ARCH_SUFFIX) : multiReduce.cu $(DEPS)
+bin/mr_$(NVCC_VERSION)_$(ARCH_SUFFIX) : multiReduce.cu $(DEPS)
 	mkdir -p bin
-	$(NVCC) $(DEFINES) $(SM_TARGETS) -o bin/part_sort_$(NVCC_VERSION)_$(ARCH_SUFFIX) multiReduce.cu scatterKernel.cu $(NVCCFLAGS) $(ARCH) $(INC) -O3 -lcuda
+	$(NVCC) $(DEFINES) $(SM_TARGETS) -o bin/mr_$(NVCC_VERSION)_$(ARCH_SUFFIX) multiReduce.cu scatterKernel.cu $(NVCCFLAGS) $(ARCH) $(INC) -O3 -lcuda
+
+mrk: bin/mrk_$(NVCC_VERSION)_$(ARCH_SUFFIX)
+
+bin/mrk_$(NVCC_VERSION)_$(ARCH_SUFFIX) : multiReduceSortReduceByKey.cu $(DEPS)
+	mkdir -p bin
+	$(NVCC) $(DEFINES) $(SM_TARGETS) -o bin/mrk_$(NVCC_VERSION)_$(ARCH_SUFFIX) multiReduceSortReduceByKey.cu /home/dbk726/moderngpu/moderngpu/src/* $(NVCCFLAGS) $(ARCH) $(INC) -O3 -I/home/dbk726/moderngpu/moderngpu/include/ -lcuda
+
 
 gather: bin/gather_sort_$(NVCC_VERSION)_$(ARCH_SUFFIX)
 
