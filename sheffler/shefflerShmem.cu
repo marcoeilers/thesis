@@ -3,6 +3,11 @@
 #include "cudpp.h"
 
 #define BINS 64
+#define THREADS_PER_BLOCK 32
+
+//#define SHEFFLER
+#define WORK_PER_BLOCK 32768
+
 
 #define FETCHLABELS
 
@@ -38,6 +43,11 @@ __global__
 void addRemainder(int *bucketSums, int *indices, int *result)
 {
 __shared__ int bins[BINS];
+#ifdef SHEFFLER
+int work = 1024;
+#else
+int work = WORK_PER_BLOCK;
+#endif
 
 int blocks = gridDim.x;
 
@@ -47,14 +57,12 @@ for (int i = threadIdx.x; i < BINS; i+=32)
 	bins[i] = bucketSums[blockIdx.x + i * blocks];
 }
 __syncthreads();
-//if (blockIdx.x == 0)
-//	printf("in addremainder first few bin %i has value %i\n", threadIdx.x, bins[threadIdx.x]);
 
 
-int *myIndices = &indices[1024 * blockIdx.x];
-int *myResult = &result[1024 * blockIdx.x];
+int *myIndices = &indices[work * blockIdx.x];
+int *myResult = &result[work * blockIdx.x];
 #pragma unroll
-for (int i = threadIdx.x; i < 1024; i+=32)
+for (int i = threadIdx.x; i < work; i+=32)
 {
 	myResult[i] += bins[myIndices[i]];
 }
@@ -63,12 +71,91 @@ for (int i = threadIdx.x; i < 1024; i+=32)
 
 
 __global__
+void naiveMultiScan(int *labels, int *values, int *allBuckets, size_t pitch)
+{
+__shared__ int buckets[BINS];
+__shared__ int curLabels[THREADS_PER_BLOCK];
+__shared__ int curValues[THREADS_PER_BLOCK];
+
+for (int i = threadIdx.x; i < BINS; i += THREADS_PER_BLOCK)
+	buckets[i] = 0;
+
+int *myLabels = labels + (WORK_PER_BLOCK * blockIdx.x);
+int *myValues = values + (WORK_PER_BLOCK * blockIdx.x);
+
+for (int i = 0; i < WORK_PER_BLOCK; i += THREADS_PER_BLOCK)
+{
+	curLabels[threadIdx.x] = myLabels[i + threadIdx.x];
+	curValues[threadIdx.x] = myValues[i + threadIdx.x];
+
+__syncthreads();
+	if (threadIdx.x == 0)
+	{
+	#pragma unroll
+	for (int j = 0; j < THREADS_PER_BLOCK; j++)
+	{
+		int curVal = curValues[j];
+		int curInd = curLabels[j];
+		curValues[j] = buckets[curInd];
+
+		buckets[curInd] += curVal;
+	}
+	}
+__syncthreads();	
+	myValues[i + threadIdx.x] = curValues[threadIdx.x];
+}
+
+int pitchByInt = pitch / sizeof(int);
+
+for (int i = threadIdx.x; i < BINS; i += THREADS_PER_BLOCK)
+{
+	allBuckets[(i * pitchByInt) + blockIdx.x] = buckets[i];
+}
+}
+
+
+__global__ 
+void lessNaiveMultiScan(int *labels, int *values, int *allBuckets, size_t pitch)
+{
+__shared__ int buckets[BINS * THREADS_PER_BLOCK];
+__shared__ int curLabels[THREADS_PER_BLOCK];
+__shared__ int curValues[THREADS_PER_BLOCK];
+
+for (int i = threadIdx.x; i < BINS * THREADS_PER_BLOCK; i += THREADS_PER_BLOCK)
+        buckets[i] = 0;
+
+int *myLabels = labels + (1024 * blockIdx.x);
+int *myValues = values + (1024 * blockIdx.x);
+
+for (int i = 0; i < 1024; i += THREADS_PER_BLOCK)
+{
+        curLabels[threadIdx.x] = myLabels[i + threadIdx.x];
+        curValues[threadIdx.x] = myValues[i + threadIdx.x];
+        if (threadIdx.x == 0)
+        {
+        #pragma unroll
+        for (int j = 0; j < 32; j++)
+        {
+                int curVal = curValues[j];
+                int curInd = curLabels[j];
+                curValues[j] = buckets[curLabels[j]];
+                buckets[curInd] += curVal;
+        }
+        }
+
+        myValues[i + threadIdx.x] = curValues[threadIdx.x];
+}
+
+int pitchByInt = pitch / sizeof(int);
+
+for (int i = 0; i < BINS; i++)
+allBuckets[(i * pitchByInt) + blockIdx.x] = buckets[i];
+}
+
+__global__
 void allMultiScan(int *labels, int *values, int *allBuckets, size_t pitch)
 {
-//if (blockIdx.x == 0 && threadIdx.x < 5)
-//	printf("in allmultiscan, value %i is %i\n", threadIdx.x, values[threadIdx.x]);
 __shared__ spinerec temp[1024 + BINS];
-//__shared__ spinerec bucket[BINS];
 spinerec *bucket = &temp[1024];
 
 // initialize
@@ -128,8 +215,6 @@ for (int i = 1024 - 32 + threadIdx.x; i >= 0; i-=32)
 for (int i = threadIdx.x * 32; i < threadIdx.x * 32 + 32; i++)
 {
 	temp[temp[i].spine].rowsum += valuesOffset[i];
-//	if (threadIdx.x == 0)
-//		printf("rowsums phase temp %i value %i new rowsum %i\n", i, values[i], temp[temp[i].spine].rowsum);
 }
 __syncthreads();
 
@@ -139,8 +224,6 @@ __syncthreads();
 for (int i = threadIdx.x; i < 1024; i += 32)
 {
 	temp[temp[i].spine].spinesum = temp[i].spinesum + temp[i].rowsum;
-//	if (threadIdx.x == 0)
-//		printf("thread 0 spinesums phase temp %i spinesum %i rowsum %i\n", i, temp[i].spinesum, temp[i].rowsum);
 } 
 __syncthreads();
 
@@ -151,6 +234,8 @@ for (int i = threadIdx.x * 32; i < threadIdx.x * 32 + 32; i++)
 {
 	int value = valuesOffset[i];
 	valuesOffset[i] = temp[temp[i].spine].spinesum;
+if (blockIdx.x == 0 && i < 50)
+	printf("index %i gets value %i\n", i, temp[temp[i].spine].spinesum);
 	__syncthreads();
 	temp[temp[i].spine].spinesum += value;
 	__syncthreads();
@@ -163,8 +248,6 @@ int pitchByInt = pitch / sizeof(int);
 for (int i = threadIdx.x; i < BINS; i += 32)
 {
 	allBuckets[(i * pitchByInt) + blockIdx.x] = bucket[i].spinesum;
-//	if (threadIdx.x == 0)
-//		printf("thread 0 bucket %i spinesum %i\n", i, bucket[i].spinesum);
 }
 
 }
@@ -172,7 +255,12 @@ for (int i = threadIdx.x; i < BINS; i += 32)
 void invokeMultiScan(int *indices, int *values, int num_elements)
 {
 int threadspb = 32;
+#ifdef SHEFFLER
 int blocks = num_elements / 1024;
+#else
+int blocks = num_elements / WORK_PER_BLOCK;
+#endif 
+
 
 int *allBuckets;
 int *allBucketsResult;
@@ -184,32 +272,39 @@ cudaMallocPitch((void**)&allBucketsResult, &pitch_result, blocks * sizeof(int), 
 dim3 dimBlock(threadspb, 1);
 dim3 dimGrid(blocks, 1);
 cudaFuncSetCacheConfig(allMultiScan, cudaFuncCachePreferShared);
+cudaFuncSetCacheConfig(addRemainder, cudaFuncCachePreferShared);
 
-//printf("before multiscan indices values\n");
-//printDeviceArrays(indices, values, 100);
-//printf("in invokemultiscan values address is %u\n", values);
-//printDeviceArrays(values, values, 1);
-timeval before, after;
+
+timeval before, between1, between2, after;
+
 gettimeofday(&before, NULL);
+
+#ifdef SHEFFLER
 allMultiScan<<<dimGrid, dimBlock>>>(indices, values, allBuckets, pitch);
+#else
+naiveMultiScan<<<blocks, THREADS_PER_BLOCK>>>(indices, values, allBuckets, pitch);
+#endif
+
 cudaThreadSynchronize();
 
-//printf("\n\n\nafter multiscan indices result\n");
-//printDeviceArrays(indices, values, 100);
 
+gettimeofday(&between1, NULL);
 
-//gettimeofday(&before, NULL);
 cudppMS(blocks, allBuckets, allBucketsResult, pitch);
+cudaThreadSynchronize();
 
-//printf("\n\n\n\nbuckets before and after scan\n");
-//printDeviceArrays(allBuckets, allBucketsResult, blocks * 2);
+gettimeofday(&between2, NULL);
 
 addRemainder<<<dimGrid, dimBlock>>>(allBucketsResult, indices, values);
+
 
 cudaThreadSynchronize();
 gettimeofday(&after, NULL);
 
-printf("%i\t%f\n", num_elements, ((after.tv_sec - before.tv_sec) * 1e9 + (after.tv_usec - before.tv_usec) * 1e3) / num_elements);
+float time3 = (after.tv_sec - between2.tv_sec) * 1e9 + (after.tv_usec - between2.tv_usec) * 1e3;
+float time2 = (between2.tv_sec - between1.tv_sec) * 1e9 + (between2.tv_usec - between1.tv_usec) * 1e3;
+float time1 = (between1.tv_sec - before.tv_sec) * 1e9 + (between1.tv_usec - before.tv_usec) * 1e3;
+printf("%i\t%f\t%f\t%f\t%f\n", num_elements, time1 / num_elements, time2 / num_elements, time3 / num_elements, (time1 + time2 + time3) / num_elements);
 }
 
 void cudppMS(int blocks, int *in, int *out, size_t pitch)
@@ -293,14 +388,19 @@ invokeMultiScan(d_keys, d_values, size);
 
 cudaMemcpy(result, d_values, size * sizeof(int), cudaMemcpyDeviceToHost);
 
+timeval before, after;
+gettimeofday(&before, NULL);
 multiScanCpu(keys, values, result_cpu, size);
+gettimeofday(&after, NULL);
+
+printf("cpu needed %f ns/int \n", ((after.tv_sec - before.tv_sec) * 1e9 + (after.tv_usec - before.tv_usec) * 1e3) / size);
 
 for (int i = 0; i < size; i++)
 {
 	if (result[i] != result_cpu[i])
-		printf("I sense a discrepancy! %i %i %i\n", i, result[i], result_cpu[i]);
-	else
-		printf("correct!\n");
+		printf("I sense a discrepancy! %i %i %i value %i\n", i, result[i], result_cpu[i], values[i]);
+//	else
+//		printf("correct!\n");
 }
 
 printf("last error: %i\n", cudaGetLastError());
