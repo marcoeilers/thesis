@@ -9,12 +9,12 @@
 
 
 #define CHECK 128
-#define BINS_EXP 6
+#define BINS_EXP 26
 #define ELEMENTS_EXP 26
 
 void multiScanCpu(int *keys, valIndex *values, int *result, int num_elements)
 {
-	int buckets[1 << BINS_EXP];
+	int *buckets = (int*) malloc((1 << BINS_EXP) *sizeof(int));
 	for (int i = 0; i < (1 << BINS_EXP); i++)
 		buckets[i] = 0;
 
@@ -24,6 +24,7 @@ void multiScanCpu(int *keys, valIndex *values, int *result, int num_elements)
 		result[i] = buckets[keys[i]];
 //                buckets[keys[i]] += values[i].value;
 	}
+	free(buckets);
 }  
 
 template<typename ValueType, int START_BIT, int NO_BITS>
@@ -60,18 +61,24 @@ std::pair<timeval, timeval> multiScan(int *h_keys, ValueType *h_values, int *h_r
 	double_buffer.d_values[double_buffer.selector] = d_values;
 
 	// Allocate pong buffer
-	cudaMalloc((void**) &double_buffer.d_keys[double_buffer.selector ^ 1], sizeof(KeyType) * num_elements);
-	cudaMalloc((void**) &double_buffer.d_values[double_buffer.selector ^ 1], sizeof(ValueType) * num_elements);
+        int *d_double_keys;
+	double *d_double_values;
+
+        cudaMalloc((void**) &d_double_keys, sizeof(KeyType) * num_elements);
+        cudaMalloc((void**) &d_double_values, sizeof(ValueType) * num_elements);
+        double_buffer.d_keys[double_buffer.selector ^ 1] = d_double_keys;
+        double_buffer.d_values[double_buffer.selector ^ 1] = d_double_values;
+
 
 	// Sort
 //	enactor.Sort(double_buffer, num_elements);
 	enactor.OneRunSort<START_BIT, NO_BITS>(double_buffer, num_elements);
 
 	cudaThreadSynchronize();
-printf("error after sort %i\n", cudaGetLastError());
+//printf("error after sort %i\n", cudaGetLastError());
 	
-	valIndex *checkValues = (valIndex*)malloc(sizeof(valIndex) * CHECK);
-	int *checkKeys = (int*)malloc(sizeof(int) * CHECK);
+//	valIndex *checkValues = (valIndex*)malloc(sizeof(valIndex) * CHECK);
+//	int *checkKeys = (int*)malloc(sizeof(int) * CHECK);
 /*	cudaMemcpy(checkValues, double_buffer.d_values[double_buffer.selector], sizeof(valIndex) * CHECK, cudaMemcpyDeviceToHost);
 	cudaMemcpy(checkKeys, d_keys, sizeof(int) * CHECK, cudaMemcpyDeviceToHost);
 
@@ -92,7 +99,7 @@ printf("\n\n\n\n");
 	gettimeofday(&between, NULL);
 	thrust::equal_to<int> binary_pred;
 	valIndexAdd     binary_op;
-	thrust::device_ptr<int> keys_ptr(d_keys);
+	thrust::device_ptr<int> keys_ptr(double_buffer.d_keys[double_buffer.selector]);
 	thrust::device_ptr<valIndex> values_ptr((valIndex*)double_buffer.d_values[double_buffer.selector]);
 
 	thrust::inclusive_scan_by_key(keys_ptr, keys_ptr + num_elements, values_ptr, values_ptr, binary_pred, binary_op);
@@ -118,11 +125,11 @@ printf("\n\n\n\n");
         gettimeofday(&after, NULL);
 
 	// Cleanup "pong" storage
-	if (double_buffer.d_keys[double_buffer.selector ^ 1]) {
-		cudaFree(double_buffer.d_keys[double_buffer.selector ^ 1]);
+	if (d_double_values) {
+		cudaFree(d_double_values);
 	}
-	if (double_buffer.d_values[double_buffer.selector ^ 1]) {
-		cudaFree(double_buffer.d_values[double_buffer.selector ^ 1]);
+	if (d_double_keys) {
+		cudaFree(d_double_keys);
 	}
 
 	cudaMemcpy(h_result, d_result, sizeof(int) * num_elements, cudaMemcpyDeviceToHost);
@@ -166,12 +173,12 @@ printf("valIndex %i float %i double %i\n", sizeof(valIndex), sizeof(float), size
 	int *h_result_cpu = new int[num_elements];
 
         // Initialize host problem data
-
+	int index = rand() % (1 << BINS_EXP);
         for (int i = 0; i < num_elements; ++i)
         {
-                h_keys[i] = rand() % (1 << BINS_EXP);
+                h_keys[i] = index;
                 h_values[i].index = i;
-		h_values[i].value = rand() % 10000;
+		h_values[i].value = rand() % 1000;
 		h_result[i] = 1;
 //		printf("%i\t%i\t%i\n", i, h_keys[i], h_values[i].value);
         }

@@ -3,7 +3,7 @@
 #include <scatterKernel.cuh>
            
 
-#define BIN_EXP 8
+#define BIN_EXP 24
 #define BITS 0
 #define EXP 26
 #define START (BIN_EXP - BITS)
@@ -56,17 +56,21 @@ std::pair<timeval, timeval> sortHist(int *h_keys, int *h_result, int num_element
 	b40c::radix_sort::Enactor enactor;
 
 	// Create ping-pong storage wrapper
-		b40c::util::DoubleBuffer<KeyType> double_buffer;
+	b40c::util::DoubleBuffer<KeyType> double_buffer;
 
-		// The current key buffer (double_buffer.d_keys[double_buffer.selector]) backs the keys.
-		double_buffer.d_keys[double_buffer.selector] = d_keys;
+	// The current key buffer (double_buffer.d_keys[double_buffer.selector]) backs the keys.
+	double_buffer.d_keys[double_buffer.selector] = d_keys;
 
-		// Allocate pong buffer
-		cudaMalloc((void**) &double_buffer.d_keys[double_buffer.selector ^ 1], sizeof(KeyType) * num_elements);
 
-		// Sort
-//		enactor.Sort(double_buffer, num_elements);
-		enactor.OneRunSort<START_BIT, NO_BITS>(double_buffer, num_elements);
+	// Allocate pong buffer
+        int *d_double_keys;
+
+        cudaMalloc((void**) &d_double_keys, sizeof(KeyType) * num_elements);
+        double_buffer.d_keys[double_buffer.selector ^ 1] = d_double_keys;
+
+	// Sort
+//	enactor.Sort(double_buffer, num_elements);
+	enactor.OneRunSort<START_BIT, NO_BITS>(double_buffer, num_elements);
 
 
 	cudaThreadSynchronize();
@@ -76,40 +80,19 @@ std::pair<timeval, timeval> sortHist(int *h_keys, int *h_result, int num_element
 
         cudaMalloc((void**) &d_result, sizeof(int) * num_elements);
 
-#ifdef CHECK_RESULTS
 	cudaMemset((void*) d_result, 0, sizeof(int) * (1 << BIN_EXP));
-#endif
 //printf("error after malloc %i\n", cudaGetLastError());
-        hist(d_keys, d_result, num_elements);
+        hist(double_buffer.d_keys[double_buffer.selector], d_result, num_elements);
 //printf("error after scatter %i\n", cudaGetLastError());
         cudaThreadSynchronize();
         gettimeofday(&after, NULL);
 
-		// Cleanup "pong" storage
-		if (double_buffer.d_keys[double_buffer.selector ^ 1]) {
-			cudaFree(double_buffer.d_keys[double_buffer.selector ^ 1]);
-		}
+	// Cleanup "pong" storage
+	if (d_double_keys) {
+		cudaFree(d_double_keys);
+	}
 
 
-//------ doSortDevice
-/*
-
-
-	int *valuesPtr = doSortDevice<START_BIT, NO_BITS>(d_keys, d_values, num_elements, keys_only);
-	cudaThreadSynchronize();
-printf("error after sort %i\n", cudaGetLastError());
-
-	gettimeofday(&between, NULL);
-
-	cudaMalloc((void**) &d_result, sizeof(int) * (1 << BINS_EXP));
-printf("error after malloc %i\n", cudaGetLastError());
-	scatter(d_keys, valuesPtr, d_result, num_elements);
-printf("error after scatter %i\n", cudaGetLastError());
-	cudaThreadSynchronize();
-//int error = cudaGetLastError();
-//printf("error after scatter %i\n", error);
-	gettimeofday(&after, NULL);
-*/
 	cudaMemcpy(h_result, d_result, sizeof(int) * (1 << BIN_EXP), cudaMemcpyDeviceToHost);
 
 
@@ -155,9 +138,9 @@ int main()
 
         for (int i = 0; i < num_elements; ++i)
         {
-              h_keys[i] = rand() % (1 << BIN_EXP);
+//              h_keys[i] = rand() % (1 << BIN_EXP);
 //		h_keys[i] = indices[selfsimilar(1 << BIN_EXP, 0.2)];
-//		h_keys[i] = index;
+		h_keys[i] = index;
        }
 
 	for (int i = 0; i < (1 << BIN_EXP); i++)

@@ -2,9 +2,10 @@
 #include <sys/time.h>
 #include <scatterKernel.cuh>
 
-#define BIN_BITS 16           
-#define BITS 6
+#define BIN_BITS 26
+#define BITS 0
 #define EXP 26
+//#define START 0
 #define START (BIN_BITS - BITS)
 #define BUCKETS (1 << BIN_BITS)
 
@@ -71,9 +72,14 @@ std::pair<timeval, timeval> sortMR(int *h_keys, int *h_values, int *h_result, in
 	double_buffer.d_keys[double_buffer.selector] = d_keys;
 	double_buffer.d_values[double_buffer.selector] = d_values;
 
-	// Allocate pong buffer
-	cudaMalloc((void**) &double_buffer.d_keys[double_buffer.selector ^ 1], sizeof(KeyType) * num_elements);
-	cudaMalloc((void**) &double_buffer.d_values[double_buffer.selector ^ 1], sizeof(ValueType) * num_elements);
+// Allocate pong buffer
+        int *d_double_keys, *d_double_values;
+
+        cudaMalloc((void**) &d_double_keys, sizeof(KeyType) * num_elements);
+        cudaMalloc((void**) &d_double_values, sizeof(ValueType) * num_elements);
+        double_buffer.d_keys[double_buffer.selector ^ 1] = d_double_keys;
+        double_buffer.d_values[double_buffer.selector ^ 1] = d_double_values;
+
 
 	// Sort
 //	enactor.Sort(double_buffer, num_elements);
@@ -92,17 +98,17 @@ std::pair<timeval, timeval> sortMR(int *h_keys, int *h_values, int *h_result, in
 	cudaMemset(d_result, 0, sizeof(int) * BUCKETS);
 
 //printf("error after malloc %i\n", cudaGetLastError());
-        multiReduce(d_keys, double_buffer.d_values[double_buffer.selector], d_result, num_elements);
+        multiReduce(double_buffer.d_keys[double_buffer.selector], double_buffer.d_values[double_buffer.selector], d_result, num_elements);
 //printf("error after scatter %i\n", cudaGetLastError());
         cudaThreadSynchronize();
         gettimeofday(&after, NULL);
 
 	// Cleanup "pong" storage
-	if (double_buffer.d_keys[double_buffer.selector ^ 1]) {
-		cudaFree(double_buffer.d_keys[double_buffer.selector ^ 1]);
+	if (d_double_keys) {
+		cudaFree(d_double_keys);
 	}
-	if (double_buffer.d_values[double_buffer.selector ^ 1]) {
-		cudaFree(double_buffer.d_values[double_buffer.selector ^ 1]);
+	if (d_double_values) {
+		cudaFree(d_double_values);
 	}
 
 //	printf("\n\n\n\nvalues after multiReduce\n");
@@ -140,10 +146,11 @@ int main()
 	int *result_cpu = new int[BUCKETS];
 
         // Initialize host problem data
-
+	int index = rand() % BUCKETS;
         for (int i = 0; i < num_elements; ++i)
         {
-                h_keys[i] = rand() % BUCKETS;
+		h_keys[i] = index;
+//                h_keys[i] = rand() % BUCKETS;
                 h_values[i] = rand() % 100;
 // 		if (i < 50)
 //		printf("original key value %i %i %i\n", i, h_keys[i], h_values[i]);

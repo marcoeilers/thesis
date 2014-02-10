@@ -5,7 +5,7 @@
 using namespace mgpu;
 
 #define PREPROCESS true
-#define BIN_BITS 16           
+#define BIN_BITS 26
 #define EXP 26
 #define BUCKETS (1 << BIN_BITS)
 
@@ -100,8 +100,13 @@ std::pair<timeval, timeval> sortMR(int *h_keys, int *h_values, int *h_result, in
 	double_buffer.d_values[double_buffer.selector] = d_values;
 
 	// Allocate pong buffer
-	cudaMalloc((void**) &double_buffer.d_keys[double_buffer.selector ^ 1], sizeof(KeyType) * num_elements);
-	cudaMalloc((void**) &double_buffer.d_values[double_buffer.selector ^ 1], sizeof(ValueType) * num_elements);
+	int *d_double_keys, *d_double_values;
+
+	cudaMalloc((void**) &d_double_keys, sizeof(KeyType) * num_elements);
+	cudaMalloc((void**) &d_double_values, sizeof(ValueType) * num_elements);
+	double_buffer.d_keys[double_buffer.selector ^ 1] = d_double_keys;
+	double_buffer.d_values[double_buffer.selector ^ 1] = d_double_values;
+	
 
 	// Sort
 //	enactor.Sort(double_buffer, num_elements);
@@ -112,23 +117,28 @@ std::pair<timeval, timeval> sortMR(int *h_keys, int *h_values, int *h_result, in
 
         gettimeofday(&between, NULL);
 
+	int *valuesPtr = double_buffer.d_values[double_buffer.selector];
+	int *keysPtr = double_buffer.d_keys[double_buffer.selector];
+
+//	int *valuesPtr = ((BIN_BITS + 4) / 5) % 2 == 0 ? double_buffer.d_values[double_buffer.selector] : double_buffer.d_values[double_buffer.selector ^ 1];
+//	int *keysPtr = ((BIN_BITS + 4) / 5) % 2 == 0 ? double_buffer.d_keys[double_buffer.selector] : double_buffer.d_keys[double_buffer.selector ^ 1];
 //	printf("\n\n\n\nkeys values after sort\n");
 //	printDeviceArrays(d_keys, double_buffer.d_values[double_buffer.selector], 50);	
 
         cudaMalloc((void**) &d_result, sizeof(int) * BUCKETS);
 	ContextPtr contextPtr = CreateCudaDevice(0, NULL, false);
 	
-	simpleReduceByKey<KeyType, ValueType>(*contextPtr, d_keys, double_buffer.d_values[double_buffer.selector], d_result, num_elements, BUCKETS, PREPROCESS);
+	simpleReduceByKey<KeyType, ValueType>(*contextPtr, keysPtr, valuesPtr, d_result, num_elements, BUCKETS, PREPROCESS);
 
         cudaThreadSynchronize();
         gettimeofday(&after, NULL);
 
 	// Cleanup "pong" storage
-	if (double_buffer.d_keys[double_buffer.selector ^ 1]) {
-		cudaFree(double_buffer.d_keys[double_buffer.selector ^ 1]);
+	if (d_double_keys) {
+		cudaFree(d_double_keys);
 	}
-	if (double_buffer.d_values[double_buffer.selector ^ 1]) {
-		cudaFree(double_buffer.d_values[double_buffer.selector ^ 1]);
+	if (d_double_values) {
+		cudaFree(d_double_values);
 	}
 
 //	printf("\n\n\n\nvalues after multiReduce\n");
@@ -166,10 +176,11 @@ int main()
 	int *result_cpu = new int[BUCKETS];
 
         // Initialize host problem data
-
+	int index = rand() % BUCKETS;
         for (int i = 0; i < num_elements; ++i)
         {
-                h_keys[i] = rand() % BUCKETS;
+		h_keys[i] = index;
+//                h_keys[i] = rand() % BUCKETS;
                 h_values[i] = rand() % 100;
 // 		if (i < 50)
 //		printf("original key value %i %i %i\n", i, h_keys[i], h_values[i]);
@@ -185,18 +196,19 @@ int main()
 	{
 		if (h_result[i] != result_cpu[i])
 		{
-			printf("i sense a discrepancy! %i %i %i\n", i, h_result[i], result_cpu[i]);
+//			printf("i sense a discrepancy! %i %i %i\n", i, h_result[i], result_cpu[i]);
 			correct = false;
 		}
 	}
 	if (correct)
 	printf("correct result!\n");
-
+	else
+	printf("INCORRECT!!!\n");
 	printf("last error is %i\n", cudaGetLastError());
 
 	float time1 = result.first.tv_sec * 1e9 + result.first.tv_usec * 1e3;
 	float time2 = result.second.tv_sec * 1e9 + result.second.tv_usec * 1e3;
-	printf("%i\t%f\t%f\t%f\n", num_elements, time1 / num_elements, time2 / num_elements, (time1 + time2) / num_elements);
+	printf("%i bins, %i\t%f\t%f\t%f\n", BUCKETS, num_elements, time1 / num_elements, time2 / num_elements, (time1 + time2) / num_elements);
 
 	delete(result_cpu);
 	delete(h_keys);
