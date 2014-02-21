@@ -25,6 +25,7 @@
 // Local Includes
 #include "histogram_common.h"
 
+#define SHADOW 8u
 
 /*-----------------------------------------------------------------------------
   Helper Templates
@@ -256,6 +257,8 @@ void Bin4_None
 
    // Get 'LaneRows' from bins
       // [0..63] = [0..255]/4
+   //uint laneRow13 = val32 >> 2u;     // Divide by 4
+   //uint laneRow24 = val32 >> 10u;    // Shift by 8, divide by 4
 
    uint laneRow13 = val32 << 4u;
    uint laneRow24 = val32 >> 4u;
@@ -267,6 +270,10 @@ void Bin4_None
       // Mask off 'laneRows' to avoid extra info
    uint LI_13 = laneRow13 & maskRow13;  // get lanes for 1 & 3 bins
    uint LI_24 = laneRow24 & maskRow13;  // get lanes for 2 & 4 bins
+
+   // Get local indices
+   //uint LI_13 = laneRow13 * BlockSize;
+   //uint LI_24 = laneRow24 * BlockSize;
 
    // Get Shifts [0,8,16,24] = [0,1,2,3]*8
    uint shift = laneCol << 3u;
@@ -289,32 +296,40 @@ void Bin4_None
    uint inc3 = 1u << s3;
    uint inc2 = 1u << s2;
    uint inc1 = 1u << s1;
+   
+   uint oldCnt, newCnt;
 
-uint oldCnt, newCnt;
-
+if (SHADOW > 1)
+{
+atomicAdd(&cntPtr[LI_4], inc4);
+atomicAdd(&cntPtr[LI_3], inc3);
+atomicAdd(&cntPtr[LI_2], inc2);
+atomicAdd(&cntPtr[LI_1], inc1);
+}else{
    // Increment 4th bin
    oldCnt = cntPtr[LI_4];
    newCnt = oldCnt + inc4;
    cntPtr[LI_4] = newCnt;
-//atomicAdd(&cntPtr[LI_4], inc4); // marco
+
 
    // Increment 3rd bin
    oldCnt = cntPtr[LI_3];
    newCnt = oldCnt + inc3;
    cntPtr[LI_3] = newCnt;
-//atomicAdd(&cntPtr[LI_3], inc3); // marco
+
 
    // Increment 2nd bin
    oldCnt = cntPtr[LI_2];
    newCnt = oldCnt + inc2;
    cntPtr[LI_2] = newCnt;
-//atomicAdd(&cntPtr[LI_2], inc2); // marco
+
 
    // Increment 1st bin
    oldCnt = cntPtr[LI_1];
    newCnt = oldCnt + inc1;
    cntPtr[LI_1] = newCnt;
-//atomicAdd(&cntPtr[LI_1], inc1); // marco
+}
+
 }
 
 
@@ -621,6 +636,11 @@ void AddThreadToRowCounts_V2
    uint   tid       // IN  - thread ID
 ) 
 {
+   uint shadowId = tid >> 6;
+//if (threadIdx.x % 32 == 0)
+//printf("my shadowid is %u, so i'm adding %u and getting %u numbers \n", shadowId, shadowId * (BlockSize / SHADOW), 64 / SHADOW / 4);
+   uint offset = (tid % BlockSize) + shadowId * (BlockSize / SHADOW);
+
    uint sum13, sum24;
    sum13 = 0u;
    sum24 = 0u;
@@ -631,6 +651,33 @@ void AddThreadToRowCounts_V2
 
    // Accumulate Row Sums [0..63]
       // Note: Also zeros out count array while accumulating
+
+#pragma unroll
+for (uint i = 0u; i < (64 / SHADOW); i += 4)
+{
+	SS_Sums_4_Next_V2<BlockSize, BlockMask>(sum13, sum24, basePtr, (offset + i));
+}
+/*
+const uint todo = 16 / SHADOW;
+
+if (todo >= 1u) SS_Sums_4_Next_V2<BlockSize, BlockMask>(sum13, sum24, basePtr, (offset));
+if (todo >= 2u) SS_Sums_4_Next_V2<BlockSize, BlockMask>(sum13, sum24, basePtr, (offset + 4));
+if (todo >= 3u) SS_Sums_4_Next_V2<BlockSize, BlockMask>(sum13, sum24, basePtr, (offset + 8));
+if (todo >= 4u) SS_Sums_4_Next_V2<BlockSize, BlockMask>(sum13, sum24, basePtr, (offset + 12));
+if (todo >= 5u) SS_Sums_4_Next_V2<BlockSize, BlockMask>(sum13, sum24, basePtr, (offset + 16));
+if (todo >= 6u) SS_Sums_4_Next_V2<BlockSize, BlockMask>(sum13, sum24, basePtr, (offset + 20));
+if (todo >= 7u) SS_Sums_4_Next_V2<BlockSize, BlockMask>(sum13, sum24, basePtr, (offset + 24));
+if (todo >= 8u) SS_Sums_4_Next_V2<BlockSize, BlockMask>(sum13, sum24, basePtr, (offset + 28));
+if (todo >= 9u) SS_Sums_4_Next_V2<BlockSize, BlockMask>(sum13, sum24, basePtr, (offset + 32));
+if (todo >= 10u) SS_Sums_4_Next_V2<BlockSize, BlockMask>(sum13, sum24, basePtr, (offset + 36));
+if (todo >= 11u) SS_Sums_4_Next_V2<BlockSize, BlockMask>(sum13, sum24, basePtr, (offset + 40));
+if (todo >= 12u) SS_Sums_4_Next_V2<BlockSize, BlockMask>(sum13, sum24, basePtr, (offset + 44));
+if (todo >= 13u) SS_Sums_4_Next_V2<BlockSize, BlockMask>(sum13, sum24, basePtr, (offset + 48));
+if (todo >= 14u) SS_Sums_4_Next_V2<BlockSize, BlockMask>(sum13, sum24, basePtr, (offset + 52));
+if (todo >= 15u) SS_Sums_4_Next_V2<BlockSize, BlockMask>(sum13, sum24, basePtr, (offset + 56));
+if (todo >= 16u) SS_Sums_4_Next_V2<BlockSize, BlockMask>(sum13, sum24, basePtr, (offset + 60));
+*/
+/*
    SS_Sums_4_Next_V2< BlockSize, BlockMask >( sum13, sum24, basePtr, (tid +  0) );
    SS_Sums_4_Next_V2< BlockSize, BlockMask >( sum13, sum24, basePtr, (tid +  4) );
    SS_Sums_4_Next_V2< BlockSize, BlockMask >( sum13, sum24, basePtr, (tid +  8) );
@@ -647,19 +694,22 @@ void AddThreadToRowCounts_V2
    SS_Sums_4_Next_V2< BlockSize, BlockMask >( sum13, sum24, basePtr, (tid + 52) );
    SS_Sums_4_Next_V2< BlockSize, BlockMask >( sum13, sum24, basePtr, (tid + 56) );
    SS_Sums_4_Next_V2< BlockSize, BlockMask >( sum13, sum24, basePtr, (tid + 60) );
-
+*/
    // Convert row sums from pairs back into singletons
    uint sum1, sum2, sum3, sum4;
    sum1 = sum13 & 0x0000FFFFu;
    sum2 = sum24 & 0x0000FFFFu;
    sum3 = sum13 >> 16u;
    sum4 = sum24 >> 16u;
-
+//if (threadIdx.x % 64 == 3)
+//	printf("i added stuff up and all i got was sum4 %u\n", sum4);
    // Add row sums back into register counts
+
    rCnt1 += sum1;
    rCnt2 += sum2;
    rCnt3 += sum3;
    rCnt4 += sum4;
+
 }
 
 
@@ -671,7 +721,7 @@ void AddThreadToRowCounts_V2
 template < uint logBankSize,   // log<2>( Channels per Bank )
            uint logWarpSize,	  // log<2>( Threads per Warp )
            uint BlockSize,     // Threads Per Block (needs to be a power of 2 & multiple of warpsize)
-	   uint marcoShadowFactor, // how many shadow warps per original warp
+uint marcoShadowFactor,
 		   uint GridSize,	  // Blocks Per Grid
            uint K_length >     // #elements to process per thread before looping
 __global__
@@ -686,8 +736,7 @@ void H_K1_CountRows_256_TRISH
 	//-------------------------------------------
 	// Constant values (computed at compile time)
 	//-------------------------------------------
-const uint marcoRealBlockSize = BlockSize; //marcoShadowFactor * BlockSize;
-
+const uint marcoRealBlockSize = marcoShadowFactor * BlockSize;
 		// Bank Size (elements per bank)
 	const uint BankSize    = (1u << logBankSize);	   // 32 = 2^5 threads per bank
 	const uint BankMask    = BankSize - 1u;	         // 31 = 32 - 1 = 0x1F = b11111
@@ -706,9 +755,10 @@ const uint marcoRealBlockSize = BlockSize; //marcoShadowFactor * BlockSize;
 	//const uint ChunkSize     = BlockSize * K_length;
    //const uint IN_WarpSize   = K_length * WarpSize;
 
-      // K_length 
-   const uint K4_length = K_length * 4u;      // 252 = 63 * 4
-   const uint K4_stop   = 256u - K4_length;   // 4 = 256 - 252
+      // K_length
+   //const uint K_length = 16u;               // 16 
+   const uint K4_length = K_length * (4u * marcoShadowFactor);      // 64 = 16 * 4
+   const uint K4_stop   = 256u - K4_length;   // 192 = 256 - 64
 
 		// Warps Per Block
 	const uint WarpsPerBlock = BlockSize / WarpSize;   // 2 = 64/32
@@ -731,9 +781,8 @@ const uint marcoRealBlockSize = BlockSize; //marcoShadowFactor * BlockSize;
    const uint OutStrideSize = OutLength * strideBank;
 
 		// Array Initialization
-	const uint nPassesThrd  = sizeTCounts / BlockSize;
-	const uint leftOverThrd = sizeTCounts - (nPassesThrd * BlockSize);
-
+	const uint nPassesThrd  = sizeTCounts / marcoRealBlockSize;
+	const uint leftOverThrd = sizeTCounts - (nPassesThrd * marcoRealBlockSize);
 	const uint nThreadsPerGrid = marcoRealBlockSize * GridSize;	//   3,072 = 64 * 48
    const uint rowSize = K_length * nThreadsPerGrid;		// 193,586 = 63 * 64 * 48
 
@@ -760,36 +809,41 @@ const uint marcoRealBlockSize = BlockSize; //marcoShadowFactor * BlockSize;
    uint * basePtr;
 
    {
+      // Get Warp Row & Column
+      //uint warpRow = threadIdx.x >> logWarpSize; // tid / 32
+      //uint warpCol = threadIdx.x & WarpMask;     // tid % 32
+
+      // Compute starting 'input' offset (Warp Sequential Layout)
+      //inIdx = (warpRow * IN_WarpSize) // Move to each warps assigned portion of work
+      //        + warpCol;              // Move to warp column (in warp)
 
          // Compute starting serial scan index
-      uint baseIdx = (tid * BlockSize);
+//      uint baseIdx = (tid * BlockSize);
 
          // Get pointers into shared memory array
          // for different views of memory
       cntPtr  = &s_thrdCounts[threadIdx.x % BlockSize];
-      basePtr = &s_thrdCounts[baseIdx % BlockSize];
+      basePtr = &s_thrdCounts[(threadIdx.x % BlockSize) * BlockSize];
    }
 
 
 	//-------------------------------------------
 	// Zero out arrays
 	//-------------------------------------------
-
+//if (threadIdx.x < BlockSize)
    {
 	   //-
 	   // Zero out 'Per Thread' counts
 	   //-
-//if (threadIdx.x < BlockSize) // marco
-//{
+
       uint * ptrTC = (&s_thrdCounts[0]);
       SetArray_BlockSeq
          < 
-            uint, BlockSize, nPassesThrd, leftOverThrd, sizeTCounts
+            uint, marcoRealBlockSize, nPassesThrd, leftOverThrd, sizeTCounts
          >
          ( 
             ptrTC, 0u
          );
-//}
    }
 
 	// Sync Threads in Block
@@ -803,10 +857,10 @@ const uint marcoRealBlockSize = BlockSize; //marcoShadowFactor * BlockSize;
    uint elemOffset = (bid * K_length * marcoRealBlockSize) + tid;	// Starting offset 
 
    uint nElems32        = stop - start + 1u;
+   uint nMaxRows        = (nElems32 + (rowSize - 1u)) / rowSize;
    uint nSafeRows       = nElems32 / rowSize;
    uint nSafeElems      = nSafeRows * rowSize;
    uint nLeftOverElems  = nElems32 - nSafeElems;
-
    uint startIdx        = start + elemOffset;
    uint stopIdx         = startIdx + (nSafeRows * rowSize);
    uint currIdx         = startIdx;
@@ -831,7 +885,7 @@ const uint marcoRealBlockSize = BlockSize; //marcoShadowFactor * BlockSize;
       {
          // Sync Threads in Block
          if (WarpsPerBlock >= 2u) { __syncthreads(); }
-//	if (threadIdx.x < BlockSize) // marco
+//if (threadIdx.x < BlockSize) // marco
          //AddThreadToRowCounts_V1< BlockSize, BlockMask >( rowCnt1, rowCnt2, rowCnt3, rowCnt4, basePtr, tid );
          AddThreadToRowCounts_V2< BlockSize, BlockMask >( rowCnt1, rowCnt2, rowCnt3, rowCnt4, basePtr, tid );
          overflow = 0u;
@@ -848,6 +902,287 @@ const uint marcoRealBlockSize = BlockSize; //marcoShadowFactor * BlockSize;
          //        The compiler will take care of throwing away 
          //        any unused code greater than our specified 'K'
          //        value, with no negative impact on performance.
+/*
+      //-
+      // Process values [0..3] (bytes 0..15)
+      //-
+
+      // Read in first 'four' values (32-bit)
+      if (K_length >= 1u) { val1 = inPtr[0u*BlockSize]; }
+      if (K_length >= 2u) { val2 = inPtr[1u*BlockSize]; }
+      if (K_length >= 3u) { val3 = inPtr[2u*BlockSize]; }
+      if (K_length >= 4u) { val4 = inPtr[3u*BlockSize]; }
+
+      // Bin first 'four' values
+      if (K_length >= 1u) { Bin4_None<BlockSize>( cntPtr, val1 ); }
+      if (K_length >= 2u) { Bin4_None<BlockSize>( cntPtr, val2 ); }
+      if (K_length >= 3u) { Bin4_None<BlockSize>( cntPtr, val3 ); }
+      if (K_length >= 4u) { Bin4_None<BlockSize>( cntPtr, val4 ); }
+
+
+      //-
+      // Process values [4..7] (bytes 16..31)
+      //-
+
+      // Read in next 'four' values (32-bit)
+      if (K_length >= 5u) { val1 = inPtr[4u*BlockSize]; }
+      if (K_length >= 6u) { val2 = inPtr[5u*BlockSize]; }
+      if (K_length >= 7u) { val3 = inPtr[6u*BlockSize]; }
+      if (K_length >= 8u) { val4 = inPtr[7u*BlockSize]; }
+
+      // Bin 'four' values (4 bytes at a time)
+      if (K_length >= 5u) { Bin4_None<BlockSize>( cntPtr, val1 ); }
+      if (K_length >= 6u) { Bin4_None<BlockSize>( cntPtr, val2 ); }
+      if (K_length >= 7u) { Bin4_None<BlockSize>( cntPtr, val3 ); }
+      if (K_length >= 8u) { Bin4_None<BlockSize>( cntPtr, val4 ); }
+
+
+      //-
+      // Process values [8..11] (bytes 32..47)
+      //-
+
+      // Read in next 'four' values (32-bit)
+      if (K_length >=  9u) { val1 = inPtr[ 8u*BlockSize]; } 
+      if (K_length >= 10u) { val2 = inPtr[ 9u*BlockSize]; }
+      if (K_length >= 11u) { val3 = inPtr[10u*BlockSize]; }
+      if (K_length >= 12u) { val4 = inPtr[11u*BlockSize]; }
+
+      // Bin 'four' values (4 bytes at a time)
+      if (K_length >=  9u) { Bin4_None<BlockSize>( cntPtr, val1 ); }
+      if (K_length >= 10u) { Bin4_None<BlockSize>( cntPtr, val2 ); }
+      if (K_length >= 11u) { Bin4_None<BlockSize>( cntPtr, val3 ); }
+      if (K_length >= 12u) { Bin4_None<BlockSize>( cntPtr, val4 ); }
+
+      //-
+      // Process values [12..15] (bytes 48..63)
+      //-
+
+      // Read in next 'four' values (32-bit)
+      if (K_length >= 13u) { val1 = inPtr[12u*BlockSize]; }
+      if (K_length >= 14u) { val2 = inPtr[13u*BlockSize]; }
+      if (K_length >= 15u) { val3 = inPtr[14u*BlockSize]; }
+      if (K_length >= 16u) { val4 = inPtr[15u*BlockSize]; }
+
+      // Bin 'four' values (4 bytes at a time)
+      if (K_length >= 13u) { Bin4_None<BlockSize>( cntPtr, val1 ); }
+      if (K_length >= 14u) { Bin4_None<BlockSize>( cntPtr, val2 ); }
+      if (K_length >= 15u) { Bin4_None<BlockSize>( cntPtr, val3 ); }
+      if (K_length >= 16u) { Bin4_None<BlockSize>( cntPtr, val4 ); }
+
+
+      //-
+      // Process values [16..19] (bytes 64..79)
+      //-
+
+      // Read in next 'four' values (32-bit)
+      if (K_length >= 17u) { val1 = inPtr[16u*BlockSize]; }
+      if (K_length >= 18u) { val2 = inPtr[17u*BlockSize]; }
+      if (K_length >= 19u) { val3 = inPtr[18u*BlockSize]; }
+      if (K_length >= 20u) { val4 = inPtr[19u*BlockSize]; }
+
+      // Bin 'four' values (4 bytes at a time)
+      if (K_length >= 17u) { Bin4_None<BlockSize>( cntPtr, val1 ); }
+      if (K_length >= 18u) { Bin4_None<BlockSize>( cntPtr, val2 ); }
+      if (K_length >= 19u) { Bin4_None<BlockSize>( cntPtr, val3 ); }
+      if (K_length >= 20u) { Bin4_None<BlockSize>( cntPtr, val4 ); }
+
+
+      //-
+      // Process values [20..23] (bytes 80..95)
+      //-
+
+      // Read in next 'four' values (32-bit)
+      if (K_length >= 21u) { val1 = inPtr[20u*BlockSize]; }
+      if (K_length >= 22u) { val2 = inPtr[21u*BlockSize]; }
+      if (K_length >= 23u) { val3 = inPtr[22u*BlockSize]; }
+      if (K_length >= 24u) { val4 = inPtr[23u*BlockSize]; }
+
+      // Bin 'four' values (4 bytes at a time)
+      if (K_length >= 21u) { Bin4_None<BlockSize>( cntPtr, val1 ); }
+      if (K_length >= 22u) { Bin4_None<BlockSize>( cntPtr, val2 ); }
+      if (K_length >= 23u) { Bin4_None<BlockSize>( cntPtr, val3 ); }
+      if (K_length >= 24u) { Bin4_None<BlockSize>( cntPtr, val4 ); }
+
+
+      //-
+      // Process values [24..27] (bytes 96..111)
+      //-
+
+      // Read in next 'four' values (32-bit)
+      if (K_length >= 25u) { val1 = inPtr[24u*BlockSize]; }
+      if (K_length >= 26u) { val2 = inPtr[25u*BlockSize]; }
+      if (K_length >= 27u) { val3 = inPtr[26u*BlockSize]; }
+      if (K_length >= 28u) { val4 = inPtr[27u*BlockSize]; }
+
+      // Bin 'four' values (4 bytes at a time)
+      if (K_length >= 25u) { Bin4_None<BlockSize>( cntPtr, val1 ); }
+      if (K_length >= 26u) { Bin4_None<BlockSize>( cntPtr, val2 ); }
+      if (K_length >= 27u) { Bin4_None<BlockSize>( cntPtr, val3 ); }
+      if (K_length >= 28u) { Bin4_None<BlockSize>( cntPtr, val4 ); }
+
+
+      //-
+      // Process values [28..31] (bytes 112..127)
+      //-
+
+      // Read in next 'four' values (32-bit)
+      if (K_length >= 29u) { val1 = inPtr[28u*BlockSize]; }
+      if (K_length >= 30u) { val2 = inPtr[29u*BlockSize]; }
+      if (K_length >= 31u) { val3 = inPtr[30u*BlockSize]; }
+      if (K_length >= 32u) { val4 = inPtr[31u*BlockSize]; }
+
+      // Bin 'four' values (4 bytes at a time)
+      if (K_length >= 29u) { Bin4_None<BlockSize>( cntPtr, val1 ); }
+      if (K_length >= 30u) { Bin4_None<BlockSize>( cntPtr, val2 ); }
+      if (K_length >= 31u) { Bin4_None<BlockSize>( cntPtr, val3 ); }
+      if (K_length >= 32u) { Bin4_None<BlockSize>( cntPtr, val4 ); }
+
+
+      //-
+      // Process values [32..35] (bytes 128..143)
+      //-
+
+      // Read in next 'four' values (32-bit)
+      if (K_length >= 33u) { val1 = inPtr[32u*BlockSize]; }
+      if (K_length >= 34u) { val2 = inPtr[33u*BlockSize]; }
+      if (K_length >= 35u) { val3 = inPtr[34u*BlockSize]; }
+      if (K_length >= 36u) { val4 = inPtr[35u*BlockSize]; }
+
+      // Bin 'four' values (4 bytes at a time)
+      if (K_length >= 33u) { Bin4_None<BlockSize>( cntPtr, val1 ); }
+      if (K_length >= 34u) { Bin4_None<BlockSize>( cntPtr, val2 ); }
+      if (K_length >= 35u) { Bin4_None<BlockSize>( cntPtr, val3 ); }
+      if (K_length >= 36u) { Bin4_None<BlockSize>( cntPtr, val4 ); }
+
+
+      //-
+      // Process values [36..39] (bytes 144..159)
+      //-
+
+      // Read in next 'four' values (32-bit)
+      if (K_length >= 37u) { val1 = inPtr[36u*BlockSize]; }
+      if (K_length >= 38u) { val2 = inPtr[37u*BlockSize]; }
+      if (K_length >= 39u) { val3 = inPtr[38u*BlockSize]; }
+      if (K_length >= 40u) { val4 = inPtr[39u*BlockSize]; }
+
+      // Bin 'four' values (4 bytes at a time)
+      if (K_length >= 37u) { Bin4_None<BlockSize>( cntPtr, val1 ); }
+      if (K_length >= 38u) { Bin4_None<BlockSize>( cntPtr, val2 ); }
+      if (K_length >= 39u) { Bin4_None<BlockSize>( cntPtr, val3 ); }
+      if (K_length >= 40u) { Bin4_None<BlockSize>( cntPtr, val4 ); }
+
+      //-
+      // Process values [40..43] (bytes 160-175)
+      //-
+
+      // Read in next 'four' values (32-bit)
+      if (K_length >= 41u) { val1 = inPtr[40u*BlockSize]; }
+      if (K_length >= 42u) { val2 = inPtr[41u*BlockSize]; }
+      if (K_length >= 43u) { val3 = inPtr[42u*BlockSize]; }
+      if (K_length >= 44u) { val4 = inPtr[43u*BlockSize]; }
+
+      // Bin 'four' values (4 bytes at a time)
+      if (K_length >= 41u) { Bin4_None<BlockSize>( cntPtr, val1 ); }
+      if (K_length >= 42u) { Bin4_None<BlockSize>( cntPtr, val2 ); }
+      if (K_length >= 43u) { Bin4_None<BlockSize>( cntPtr, val3 ); }
+      if (K_length >= 44u) { Bin4_None<BlockSize>( cntPtr, val4 ); }
+
+
+      //-
+      // Process values [44..47] (bytes 176-191)
+      //-
+
+      // Read in next 'four' values (32-bit)
+      if (K_length >= 45u) { val1 = inPtr[44u*BlockSize]; }
+      if (K_length >= 46u) { val2 = inPtr[45u*BlockSize]; }
+      if (K_length >= 47u) { val3 = inPtr[46u*BlockSize]; }
+      if (K_length >= 48u) { val4 = inPtr[47u*BlockSize]; }
+
+      // Bin 'four' values (4 bytes at a time)
+      if (K_length >= 45u) { Bin4_None<BlockSize>( cntPtr, val1 ); }
+      if (K_length >= 46u) { Bin4_None<BlockSize>( cntPtr, val2 ); }
+      if (K_length >= 47u) { Bin4_None<BlockSize>( cntPtr, val3 ); }
+      if (K_length >= 48u) { Bin4_None<BlockSize>( cntPtr, val4 ); }
+
+
+      //-
+      // Process values [48-51] (bytes 192-207)
+      //-
+
+      // Read in next 'four' values (32-bit)
+      if (K_length >= 49u) { val1 = inPtr[48u*BlockSize]; }
+      if (K_length >= 50u) { val2 = inPtr[49u*BlockSize]; }
+      if (K_length >= 51u) { val3 = inPtr[50u*BlockSize]; }
+      if (K_length >= 52u) { val4 = inPtr[51u*BlockSize]; }
+
+      // Bin 'four' values (4 bytes at a time)
+      if (K_length >= 49u) { Bin4_None<BlockSize>( cntPtr, val1 ); }
+      if (K_length >= 50u) { Bin4_None<BlockSize>( cntPtr, val2 ); }
+      if (K_length >= 51u) { Bin4_None<BlockSize>( cntPtr, val3 ); }
+      if (K_length >= 52u) { Bin4_None<BlockSize>( cntPtr, val4 ); }
+
+
+      //-
+      // Process values [52-55] (bytes 208-223)
+      //-
+
+      // Read in next 'four' values (32-bit)
+      if (K_length >= 53u) { val1 = inPtr[52u*BlockSize]; }
+      if (K_length >= 54u) { val2 = inPtr[53u*BlockSize]; }
+      if (K_length >= 55u) { val3 = inPtr[54u*BlockSize]; }
+      if (K_length >= 56u) { val4 = inPtr[55u*BlockSize]; }
+
+      // Bin 'four' values (4 bytes at a time)
+      if (K_length >= 53u) { Bin4_None<BlockSize>( cntPtr, val1 ); }
+      if (K_length >= 54u) { Bin4_None<BlockSize>( cntPtr, val2 ); }
+      if (K_length >= 55u) { Bin4_None<BlockSize>( cntPtr, val3 ); }
+      if (K_length >= 56u) { Bin4_None<BlockSize>( cntPtr, val4 ); }
+
+
+      //-
+      // Process values [56-59] (bytes 224-239)
+      //-
+
+      // Read in next 'four' values (32-bit)
+      if (K_length >= 57u) { val1 = inPtr[56u*BlockSize]; }
+      if (K_length >= 58u) { val2 = inPtr[57u*BlockSize]; }
+      if (K_length >= 59u) { val3 = inPtr[58u*BlockSize]; }
+      if (K_length >= 60u) { val4 = inPtr[59u*BlockSize]; }
+
+      // Bin 'four' values (4 bytes at a time)
+      if (K_length >= 57u) { Bin4_None<BlockSize>( cntPtr, val1 ); }
+      if (K_length >= 58u) { Bin4_None<BlockSize>( cntPtr, val2 ); }
+      if (K_length >= 59u) { Bin4_None<BlockSize>( cntPtr, val3 ); }
+      if (K_length >= 60u) { Bin4_None<BlockSize>( cntPtr, val4 ); }
+
+
+      //-
+      // Process values [60-62] (bytes 240-251)
+      //-
+         // Note: We deliberately do not support k >= '64' to
+         //       avoid overflow issues during 'binning'
+         //       As our 'per thread' 'bin counts' can only handle 
+         //       '255' increments before overflow becomes a problem.
+         //       and 252 is the next smallest number 
+         //       evenly divisible by 4, IE 4 bytes per 32-bit value
+         //       63 values = 252 bytes / 4 bytes per value.
+
+      // Read in next 'four' values (32-bit)
+      if (K_length >= 61u) { val1 = inPtr[60u*BlockSize]; }
+      if (K_length >= 62u) { val2 = inPtr[61u*BlockSize]; }
+      if (K_length >= 63u) { val3 = inPtr[62u*BlockSize]; }
+
+      // Note: Do not uncomment => *OVERFLOW* bug !!!
+      //if (K_length >= 64u) { val4 = inPtr[63u*BlockSize]; }
+
+      // Bin 'four' values (4 bytes at a time)
+      if (K_length >= 61u) { Bin4_None<BlockSize>( cntPtr, val1 ); }
+      if (K_length >= 62u) { Bin4_None<BlockSize>( cntPtr, val2 ); }
+      if (K_length >= 63u) { Bin4_None<BlockSize>( cntPtr, val3 ); }
+
+      // Note: Do not uncomment => *OVERFLOW* bug !!!
+      //if (K_length >= 64u) { Bin4_None<BlockSize>( cntPtr, val4 ); }
+*/
 
       //-
       // Process values [0..3] (bytes 0..15)
@@ -1129,7 +1464,6 @@ const uint marcoRealBlockSize = BlockSize; //marcoShadowFactor * BlockSize;
       // Note: Do not uncomment => *OVERFLOW* bug !!!
       //if (K_length >= 64u) { Bin4_None<BlockSize>( cntPtr, val4 ); }
 
-
       // Increment 'overflow' count
       overflow += K4_length;   // K values * 4 bytes per value
 
@@ -1159,7 +1493,7 @@ const uint marcoRealBlockSize = BlockSize; //marcoShadowFactor * BlockSize;
       {
          // Sync Threads in Block
          if (WarpsPerBlock >= 2u) { __syncthreads(); }
-//	if (threadIdx.x < BlockSize) // marco
+//if (threadIdx.x < BlockSize) // marco
          //AddThreadToRowCounts_V1< BlockSize, BlockMask >( rowCnt1, rowCnt2, rowCnt3, rowCnt4, basePtr, tid );
          AddThreadToRowCounts_V2< BlockSize, BlockMask >( rowCnt1, rowCnt2, rowCnt3, rowCnt4, basePtr, tid );
          overflow = 0u;
@@ -1167,7 +1501,6 @@ const uint marcoRealBlockSize = BlockSize; //marcoShadowFactor * BlockSize;
          // Sync Threads in Block
          if (WarpsPerBlock >= 2u) { __syncthreads(); }
       }
-
 
          // NOTE #1:  the 'K_length' variable below is a static
          //           hard-coded constant in the range [1..63].
@@ -1590,7 +1923,7 @@ const uint marcoRealBlockSize = BlockSize; //marcoShadowFactor * BlockSize;
    {
       // Sync Threads in Block
       if (WarpsPerBlock >= 2u) { __syncthreads(); }
-//	if (threadIdx.x < BlockSize) // marco
+//if (threadIdx.x < BlockSize) // marco
       //AddThreadToRowCounts_V1< BlockSize, BlockMask >( rowCnt1, rowCnt2, rowCnt3, rowCnt4, basePtr, tid );
       AddThreadToRowCounts_V2< BlockSize, BlockMask >( rowCnt1, rowCnt2, rowCnt3, rowCnt4, basePtr, tid );
       overflow = 0u;
@@ -1599,32 +1932,51 @@ const uint marcoRealBlockSize = BlockSize; //marcoShadowFactor * BlockSize;
       if (WarpsPerBlock >= 2u) { __syncthreads(); }
    }
 
+
 	//-------------------------------------------------
 	// Write out final row 'counts'
 	//-------------------------------------------------
 
+//if (threadIdx.x < BlockSize)
    {
-//if (threadIdx.x < BlockSize) // marco
-//{
-      // Compute starting 'row counts' offset
-      uint rIdx = threadIdx.x * 4u;         // 4 groups per lane
-      uint rRow = rIdx >> logBankSize;
-      uint rCol = rIdx & BankMask;
+//if (rowCnt4 > 0)
+//printf("thread %u for 14 and 15 are %u and %u\n", threadIdx.x, rowCnt3, rowCnt4);
 
-      uint rowIdx = (rRow * strideBank) + (rCol + 1u);
+      uint rIdx, rRow, rCol, rowIdx, *rowPtr;
+//if (threadIdx.x % 32 == 0)
+//printf("my first value is %u\n", rowCnt1);
+      // Compute starting 'row counts' offset
+      rIdx = (threadIdx.x % BlockSize) * 4u;         // 4 groups per lane
+      rRow = rIdx >> logBankSize;
+      rCol = rIdx & BankMask;
+
+      rowIdx = (rRow * strideBank) + (rCol + 1u);
          // Extra '+1' to shift past initial pad element      
 
-      uint * rowPtr = &s_thrdCounts[rowIdx];
+      rowPtr = &s_thrdCounts[rowIdx];
 
       // Store row counts in row array
+
+if (SHADOW > 1u)
+{
+atomicAdd(&rowPtr[0], rowCnt1);
+atomicAdd(&rowPtr[1], rowCnt2);
+atomicAdd(&rowPtr[2], rowCnt3);
+atomicAdd(&rowPtr[3], rowCnt4);
+}else{
       rowPtr[0] = rowCnt1;
       rowPtr[1] = rowCnt2;
       rowPtr[2] = rowCnt3;
       rowPtr[3] = rowCnt4;
+}
+
 
       // Sync Threads in Block
       if (WarpsPerBlock >= 2u) { __syncthreads(); }
-
+//if (threadIdx.x  == 3)
+//printf("%u\n", rowPtr[3]);
+if (threadIdx.x < BlockSize)
+   {
       // Get Warp Row & Column
       uint warpRow = threadIdx.x >> logWarpSize; // tid / 32
       uint warpCol = threadIdx.x & WarpMask;     // tid % 32
@@ -1652,7 +2004,7 @@ const uint marcoRealBlockSize = BlockSize; //marcoShadowFactor * BlockSize;
       if (OutLength >= 6u) { outPtr[(5u*WarpSize)] = rowPtr[(5u*strideBank)]; }
       if (OutLength >= 7u) { outPtr[(6u*WarpSize)] = rowPtr[(6u*strideBank)]; }
       if (OutLength >= 8u) { outPtr[(7u*WarpSize)] = rowPtr[(7u*strideBank)]; }
-//}
+   }
    }
 }
 
@@ -1717,9 +2069,6 @@ void H_K2_RowCounts_To_RowStarts_256
 	const uint banksWS2  = (nElemsWS2 + BankMask) / BankSize;
 	const uint padWS2    = ((banksWS2 * BankSize) - nElemsWS2);
 	const uint sizeWS2   = nElemsWS2 + padWS2;
-
-	//const uint nSafePassesCnts = sizeCounts / BlockSize;
-	//const uint leftOverCnts    = sizeCounts - (nSafePassesCnts * BlockSize);
 
 	const uint nSafePassesSS1  = sizeSS1 / BlockSize;
 	const uint leftOverSS1     = sizeSS1 - (nSafePassesSS1 * BlockSize);
@@ -2143,14 +2492,15 @@ void histogramTrish256
 	const uint nGPU_ConcurrentBlocks = 3u;	// for Fermi architectures, we can achieve 3 concurrent blocks per SM (64 * 3 = 192 => 192/1536 => 12.5% occupancy 
 	const uint logBankSize  = 5u;		//  5 = log<2>( Memory Banks )
 	const uint logWarpSize  = 5u;       //  5 = log<2>( Threads per Warp )
-const uint marco_K1_ShadowFactor = 1u;	
+	
 	const uint K1_BlockSize = 64u;      // 64 = Threads per Block (Histogram Kernel)
 	const uint K1_GridSize  = nGPU_SMs * nGPU_ConcurrentBlocks;	 // GridSize (Histogram Kernel)
-
+	
+	const uint marco_K1_ShadowFactor = SHADOW;
 	const uint K2_BlockSize = 256u;		// 256 = Threads per Block (RowSum Kernel)
 	const uint K2_GridSize  = 1u;		//  1 = GridSize (RowSum Kernel)
 	
-	const uint K1_Length    = 63u; // 256u / (4u * marco_K1_ShadowFactor) - 1u;		//  31 = Work Per thread (loop unrolling)
+	const uint K1_Length    = 255 / (marco_K1_ShadowFactor * 4); //63u;		//  31 = Work Per thread (loop unrolling)
 	const uint in_start     = 0u;		//   0 = starting range
 	const uint K1_nRows     = K1_GridSize;	//  ?? = Number of rows (blocks) that are cooperatively striding across input data set
 
@@ -2192,7 +2542,7 @@ marco_K1_ShadowFactor,
 		<<< 
 			// CUDA CTA Parameters
 			K1_GridSize,	// Blocks per Grid 
-			K1_BlockSize * marco_K1_ShadowFactor	// Threads per Block
+			marco_K1_ShadowFactor * K1_BlockSize	// Threads per Block
 		>>>
 		(
 			// Function parameters
