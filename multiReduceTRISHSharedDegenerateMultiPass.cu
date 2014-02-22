@@ -3,14 +3,16 @@
 
 #define EXP 26
 #define HISTS_PER_BLOCK 32
-#define BUCKETS 256
+#define BUCKETS 128
+#define TOTALBUCKETS 512
 #define THREADS_PER_BLOCK (BUCKETS * 4)
 
-#define DEGENERATE
+//#define DEGENERATE
 
-__global__ void multiReduceKernel(int *indices, int *values, int *result, int todopb)
+__global__ void multiReducePassKernel(int *indices, int *values, int *result, int firstBucket, int todopb)
 {
 __shared__ int blockBuckets[HISTS_PER_BLOCK * BUCKETS];
+int firstNextBucket = firstBucket + BUCKETS;
 
 // initialize buckets to zero
 for (int i = threadIdx.x; i < HISTS_PER_BLOCK * BUCKETS; i += THREADS_PER_BLOCK)
@@ -44,25 +46,27 @@ for (i = threadIdx.x; i + 3 * THREADS_PER_BLOCK < todopb; i += 4 * THREADS_PER_B
 //	curVal2 = (curInd != curInd2) * curVal2;
 //	curInd2 = (curInd2 + (curInd == curInd2) * threadIdx.x) % BUCKETS;
 	
-	atomicAdd(&myBuckets[curInd * HISTS_PER_BLOCK], curVal);
-	if (curInd != curInd2)
-	atomicAdd(&myBuckets[curInd2 * HISTS_PER_BLOCK], curVal2);
+	if (curInd >= firstBucket && curInd < firstNextBucket)
+	atomicAdd(&myBuckets[(curInd % BUCKETS) * HISTS_PER_BLOCK], curVal);
+	if (curInd2 >= firstBucket && curInd2 < firstNextBucket && curInd != curInd2)
+	atomicAdd(&myBuckets[(curInd2 % BUCKETS) * HISTS_PER_BLOCK], curVal2);
 
         curVal3 = curVal3 + (curInd3 == curInd4) * curVal4;
 //        curVal4 = (curInd3 != curInd4) * curVal4;
 //        curInd4 = (curInd4 + (curInd3 == curInd4) * threadIdx.x) % BUCKETS;
 
-
-        atomicAdd(&myBuckets[curInd3 * HISTS_PER_BLOCK], curVal3);
-	if (curInd3 != curInd4)
-        atomicAdd(&myBuckets[curInd4 * HISTS_PER_BLOCK], curVal4);
+	if (curInd3 >= firstBucket && curInd3 < firstNextBucket)
+        atomicAdd(&myBuckets[(curInd3 % BUCKETS) * HISTS_PER_BLOCK], curVal3);
+	if (curInd4 >= firstBucket && curInd4 < firstNextBucket && curInd3 != curInd4)
+        atomicAdd(&myBuckets[(curInd4 % BUCKETS) * HISTS_PER_BLOCK], curVal4);
 }
 
 while (i < todopb)
 {
         int curInd = blockIndices[i];
         int curVal = blockValues[i];
-        atomicAdd(&myBuckets[curInd * HISTS_PER_BLOCK], curVal);
+	if (curInd >= firstBucket && curInd < firstNextBucket)
+        atomicAdd(&myBuckets[(curInd % BUCKETS) * HISTS_PER_BLOCK], curVal);
 	i += THREADS_PER_BLOCK;
 }
 __syncthreads();
@@ -74,7 +78,7 @@ if (threadIdx.x < HISTS_PER_BLOCK)
 int i = threadIdx.x % BUCKETS;
 do {
 	atomicAdd(&result[i], myBuckets[i * HISTS_PER_BLOCK]);
-
+//	result[i] += myBuckets[i * HISTS_PER_BLOCK];
 	i = (i + 1) % BUCKETS; 
 } while(i != threadIdx.x % BUCKETS);
 }
@@ -87,7 +91,7 @@ __host__ void multiReduce(int *indices, int *values, int *result, int num_elemen
 // set bank width to 32 bit
 cudaDeviceSetSharedMemConfig(cudaSharedMemBankSizeFourByte);
 // prefer shared mem
-cudaFuncSetCacheConfig(multiReduceKernel, cudaFuncCachePreferShared);
+cudaFuncSetCacheConfig(multiReducePassKernel, cudaFuncCachePreferShared);
 
 cudaDeviceProp props;
 cudaGetDeviceProperties(&props, 0);
@@ -99,13 +103,14 @@ int blocksPerSm = props.sharedMemPerBlock / shmemPerBlock;
 int totalBlocks = props.multiProcessorCount * blocksPerSm;
 printf("%i SMs, %i bytes shared memory, we use %i bytes per block, therefore have %i blocks\n", props.multiProcessorCount, props.sharedMemPerBlock, shmemPerBlock, totalBlocks);
 
-multiReduceKernel<<<totalBlocks, THREADS_PER_BLOCK>>>(indices, values, result, num_elements / totalBlocks);
+for (int start = 0; start < TOTALBUCKETS; start += BUCKETS)
+multiReducePassKernel<<<totalBlocks, THREADS_PER_BLOCK>>>(indices, values, &result[start], start, num_elements / totalBlocks);
 
 }
 
 void multiReduceCpu(int *keys, int *values, int *result, int num_elements)
 {
-	for (int i = 0; i < BUCKETS; i++)
+	for (int i = 0; i < TOTALBUCKETS; i++)
 		result[i] = 0;
 
 	for (int i = 0; i < num_elements; i++)
@@ -121,12 +126,12 @@ int *indices, *values, *result, *result_cpu;
 
 indices = (int*) calloc(num_elements, sizeof(int));
 values = (int*) calloc(num_elements, sizeof(int));
-result = (int*) calloc(BUCKETS, sizeof(int));
-result_cpu = (int*) calloc(BUCKETS, sizeof(int));
+result = (int*) calloc(TOTALBUCKETS, sizeof(int));
+result_cpu = (int*) calloc(TOTALBUCKETS, sizeof(int));
 
 #ifdef DEGENERATE
 printf("Degenerate input data\n");
-int index = rand() % BUCKETS;
+int index = rand() % TOTALBUCKETS;
 #endif
 
 for (int i = 0; i < num_elements; i++)
@@ -134,7 +139,7 @@ for (int i = 0; i < num_elements; i++)
 #ifdef DEGENERATE
         indices[i] = index;
 #else
-        indices[i] = rand() % BUCKETS;
+        indices[i] = rand() % TOTALBUCKETS;
 #endif
         values[i] = rand() % 1000;
 }
@@ -142,11 +147,11 @@ for (int i = 0; i < num_elements; i++)
 int *d_keys, *d_values, *d_result;
 cudaMalloc((void**)&d_keys, num_elements * sizeof(int));
 cudaMalloc((void**)&d_values, num_elements * sizeof(int));
-cudaMalloc((void**)&d_result, BUCKETS * sizeof(int));
+cudaMalloc((void**)&d_result, TOTALBUCKETS * sizeof(int));
 
 cudaMemcpy(d_keys, indices, num_elements * sizeof(int), cudaMemcpyHostToDevice);
 cudaMemcpy(d_values, values, num_elements * sizeof(int), cudaMemcpyHostToDevice);
-cudaMemset(d_result, 0, BUCKETS * sizeof(int));
+cudaMemset(d_result, 0, TOTALBUCKETS * sizeof(int));
 
 
 timeval before, after;
