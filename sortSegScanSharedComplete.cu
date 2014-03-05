@@ -6,10 +6,10 @@
 
 #define ITEMS_PER_THREAD 3
 #define BINS 64
-#define THREADS_PER_BLOCK 64
+#define THREADS_PER_BLOCK 1024
 
 //#define SHEFFLER
-#define WORK_PER_BLOCK 32768
+#define WORK_PER_BLOCK (ITEMS_PER_THREAD * THREADS_PER_BLOCK)
 
 
 
@@ -60,6 +60,7 @@ __global__ void blockSegScan(int *values, int *labels, int *result, int *allBuck
 	for (int i = 0; i < ITEMS_PER_THREAD; i++)
 	{
 		myLabels[i] = labels[ITEMS_PER_THREAD * tid + i];
+//if (myLabels[i] > BINS) printf ("i am thread %i and for i=%i my label is %i\n", threadIdx.x, i, myLabels[i]); 
 		myValues[i].index = ITEMS_PER_THREAD * tid + i;
 		myValues[i].value = values[ITEMS_PER_THREAD * tid + i];
 	}
@@ -69,6 +70,7 @@ __global__ void blockSegScan(int *values, int *labels, int *result, int *allBuck
 	for (int i = 0; i < ITEMS_PER_THREAD; i++)
 	{
 		shared.ilvs[tid * ITEMS_PER_THREAD + i].index = myValues[i].index;
+//if (myLabels[i] > BINS) printf("i'm %i just putting an invalid value of %i into myLabels\n", threadIdx.x, myLabels[i]);
 		shared.ilvs[tid * ITEMS_PER_THREAD + i].label = myLabels[i];
 		shared.ilvs[tid * ITEMS_PER_THREAD + i].value = myValues[i].value;
 	}
@@ -80,6 +82,8 @@ __global__ void blockSegScan(int *values, int *labels, int *result, int *allBuck
 		myValues[i].index = shared.ilvs[tid + i * THREADS_PER_BLOCK].index;
 		myValues[i].value = shared.ilvs[tid + i * THREADS_PER_BLOCK].value;
 		myLabels[i] = shared.ilvs[tid + i * THREADS_PER_BLOCK].label;
+//if (myLabels[i] > BINS) printf ("2 i am thread %i block %i and for i=%i my label is %i, got it from position %i\n", threadIdx.x, blockIdx.x, i, myLabels[i], tid + i * THREADS_PER_BLOCK);
+
 		if (i)
 			myFlags[i] = shared.ilvs[tid + i * THREADS_PER_BLOCK - 1].label != shared.ilvs[tid + i * THREADS_PER_BLOCK].label;
 		else
@@ -99,7 +103,7 @@ __global__ void blockSegScan(int *values, int *labels, int *result, int *allBuck
 
 
 		int writeResult = myFlags[i] ? 0 : x;
-		if (myFlags[i])
+		if (myFlags[i] && myLabels[i] != 0)
 		{
 			allBuckets[((myLabels[i] - 1) * pitchByInt) + blockIdx.x] = x;
 		}
@@ -160,9 +164,9 @@ size_t pitch_result;
 cudaMallocPitch((void**)&allBuckets, &pitch, blocks * sizeof(int),  BINS);
 cudaMallocPitch((void**)&allBucketsResult, &pitch_result, blocks * sizeof(int), BINS);
 
-dim3 dimBlock(threadspb, 1);
+dim3 dimBlock(THREADS_PER_BLOCK, 1);
 dim3 dimGrid(blocks, 1);
-cudaFuncSetCacheConfig(allMultiScan, cudaFuncCachePreferShared);
+cudaFuncSetCacheConfig(blockSegScan, cudaFuncCachePreferShared);
 cudaFuncSetCacheConfig(addRemainder, cudaFuncCachePreferShared);
 
 
@@ -173,8 +177,8 @@ gettimeofday(&before, NULL);
 //naiveGlobalSeparateMultiScan<<<blocks, THREADS_PER_BLOCK>>>(indices, values, allBuckets, pitch);
 blockSegScan<<<blocks, THREADS_PER_BLOCK>>>(values, indices, values, allBuckets, pitch);
 
-
 cudaThreadSynchronize();
+printf("error after blockSegScan is %i\n", cudaGetLastError());
 
 
 gettimeofday(&between1, NULL);
@@ -250,8 +254,7 @@ for (int i = 0; i < num_elements; i++)
 
 int main()
 {
-printf("spinerec hsa size %i\n", sizeof(spinerec));
-int size = (8 * 3 * 1024) * 10900;
+int size = (8 * 3 * 1024) * 2730;
 int *keys = (int*) malloc(size * sizeof(int));
 int *values = (int*) malloc(size * sizeof(int));
 int *result = (int*) malloc(size * sizeof(int));
@@ -286,8 +289,8 @@ printf("cpu needed %f ns/int \n", ((after.tv_sec - before.tv_sec) * 1e9 + (after
 
 for (int i = 0; i < size; i++)
 {
-	if (result[i] != result_cpu[i])
-		printf("I sense a discrepancy! %i %i %i value %i\n", i, result[i], result_cpu[i], values[i]);
+//	if (result[i] != result_cpu[i])
+//		printf("I sense a discrepancy! %i %i %i value %i\n", i, result[i], result_cpu[i], values[i]);
 //	else
 //		printf("correct!\n");
 }
