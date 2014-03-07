@@ -110,12 +110,12 @@ std::pair<timeval, timeval> sortMR(int *h_keys, int *h_values, int *h_result, in
 
 
 	ContextPtr contextPtr = CreateCudaDevice(0, NULL, false);
-	
-	cudaMalloc((void**) &d_bucketLabels, buckets * 2 * sizeof(int));
-	d_bucketValues = d_bucketLabels + buckets;
+	int *d_bucketLabels, *d_bucketValues;	
+	cudaMalloc((void**) &d_bucketLabels, BUCKETS * 2 * sizeof(int));
+	d_bucketValues = d_bucketLabels + BUCKETS;
 
 	int numSegments;
-	simpleReduceByKey<KeyType, ValueType>(*contextPtr, keysPtr, valuesPtr, d_result, num_elements, BUCKETS, &numSegments, d_bucketLabels, d_bucketValues);
+	simpleReduceByKey<KeyType, ValueType>(*contextPtr, keysPtr, valuesPtr, num_elements, BUCKETS, &numSegments, d_bucketLabels, d_bucketValues);
 
         cudaThreadSynchronize();
         gettimeofday(&after, NULL);
@@ -134,9 +134,9 @@ std::pair<timeval, timeval> sortMR(int *h_keys, int *h_values, int *h_result, in
 	cudaMemcpy(h_buckets, d_bucketLabels, sizeof(int) * BUCKETS * 2, cudaMemcpyDeviceToHost);
 
 	for (int i = 0; i < BUCKETS; i++)
-		result[i] = 0;
+		h_result[i] = 0;
 	for (int i = 0; i < numSegments; i++)
-		result[h_buckets[i]] = h_buckets[i + BUCKETS];
+		h_result[h_buckets[i]] = h_buckets[i + BUCKETS];
 	free(h_buckets);
 	cudaFree(d_bucketLabels);
 	cudaFree(d_keys);

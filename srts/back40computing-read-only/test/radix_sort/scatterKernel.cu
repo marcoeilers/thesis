@@ -114,6 +114,54 @@ __global__ void multiReduceKernel(int *indices, int *values, int *result, int nu
         }
 }
 
+__global__ void multiReduceCombineKernel(int *indices, int *values, int *result, int num_elements, int bins, int hists)
+{
+//printf("in kernel\n");
+        int blocks = gridDim.x;
+        int blockId = blockIdx.x;
+        int threadId = threadIdx.x;
+        int threadspb = blockDim.x;
+
+        int todob = num_elements / blocks;
+
+        int todo = todob / threadspb;
+        int offset = (blockId * todob) + threadId;
+
+	int *myResult = result + (bins * (blockId / blocks));
+
+        int *valEnd = values + offset + (threadspb * todo);
+        int *valStart = values + offset;
+        int *indStart = indices + offset;
+
+	if (hists >= blocks){
+		#pragma unroll 16
+                while (valStart != valEnd)
+                {
+                        int curVal = *valStart;
+                        int curInd = *indStart;
+
+                        myResult[curInd] += curVal; 
+
+                        valStart += threadspb;
+                        indStart += threadspb;
+                }
+
+	}else{
+		#pragma unroll 16
+	        while (valStart != valEnd)
+	        {
+	                int curVal = *valStart;
+	                int curInd = *indStart;
+	
+	                atomicAdd(&myResult[curInd], curVal);
+
+	                valStart += threadspb;
+	                indStart += threadspb;
+	        }
+	}
+}
+
+
 __global__ void histKernel(int *indices, int *result, int num_elements)
 {
 //printf("in kernel\n");
@@ -275,6 +323,17 @@ cudaFuncSetCacheConfig(multiReduceKernel, cudaFuncCachePreferL1);
 
 multiReduceKernel<<<dimGrid, dimBlock>>>(indices, values, result, num_elements);
 }
+
+void multiReduceCombine(int *indices, int *values, int *result, int num_elements, int blocks, int threadspb, int bins, int hists)
+{
+dim3 dimBlock(threadspb, 1);
+dim3 dimGrid(blocks, 1);
+
+cudaFuncSetCacheConfig(multiReduceCombineKernel, cudaFuncCachePreferL1);
+
+multiReduceCombineKernel<<<dimGrid, dimBlock>>>(indices, values, result, num_elements, bins, hists);
+}
+
 
 void hist(int *indices, int *result, int num_elements)
 {
