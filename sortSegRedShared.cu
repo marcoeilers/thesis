@@ -6,7 +6,6 @@
 
 #define BIN_BITS 12
 #define BITS 0
-#define EXP 26
 //#define START 0
 #define START (BIN_BITS - BITS)
 #define BUCKETS (1 << BIN_BITS)
@@ -17,12 +16,24 @@
 
 using namespace mgpu;
 
-__global__ void blockSegRed(int *values, int *labels, int *allBuckets)
+
+
+struct IndexValue {
+	int index;
+	int value;
+};
+
+struct LabelIndexValue {
+	int index;
+	int label;
+	int value;
+};
+
+__global__ void blockSegRed(int *values, int *labels, int *allBuckets, int hists)
 {
 	int tid = threadIdx.x;
 	int *ourValues = values + blockIdx.x * WORK_PER_BLOCK;
 	labels = labels + blockIdx.x * WORK_PER_BLOCK;
-	result = result + blockIdx.x * WORK_PER_BLOCK;
 	int *myResult = allBuckets + blockIdx.x;
 
 	typedef mgpu::CTASegScan<THREADS_PER_BLOCK, mgpu::plus<int> > SegScan;
@@ -98,7 +109,7 @@ __global__ void blockSegRed(int *values, int *labels, int *allBuckets)
 		__syncthreads();
 		if (threadIdx.x == (THREADS_PER_BLOCK - 1))
 		{
-			myResult[myLabels[ITEMS_PER_THREAD - 1]] = carryOut;
+			myResult[myLabels[ITEMS_PER_THREAD - 1] * hists] = carryOut;
 //                        allBuckets[((myLabels[ITEMS_PER_THREAD - 1]) * pitchByInt) + blockIdx.x] = carryOut;
 			shared.segScan.lastValue = carryOut;
 			shared.segScan.lastLabel = myLabels[i];
@@ -160,8 +171,8 @@ std::pair<timeval, timeval> sortMR(int *h_keys, int *h_values, int *h_result, in
 
         gettimeofday(&between, NULL);
 
-	int blocks = 16 * 8;
-	int threadspb = 128;
+	int blocks = num_elements / (THREADS_PER_BLOCK * ITEMS_PER_THREAD);
+	int threadspb = THREADS_PER_BLOCK;
 	int hists = blocks;
 
 	
@@ -170,7 +181,7 @@ std::pair<timeval, timeval> sortMR(int *h_keys, int *h_values, int *h_result, in
 	cudaMemset(d_allBuckets, 0, sizeof(int) * BUCKETS * hists);
 
 //__global__ void blockSegRed(int *values, int *labels, int *result, int *allBuckets, size_t pitch)
-	blockSegRed<<<blocks, threadspb>>>(d_values, d_keys, d_allBuckets);
+	blockSegRed<<<blocks, threadspb>>>(d_values, d_keys, d_allBuckets, hists);
 //        multiReduceCombine(double_buffer.d_keys[double_buffer.selector], double_buffer.d_values[double_buffer.selector], d_allBuckets, num_elements, blocks, threadspb, BUCKETS, hists);
 
         cudaThreadSynchronize();
@@ -209,7 +220,7 @@ int main()
 	typedef int KeyType;
 	typedef int ValueType;
 
-	unsigned int num_elements = 1 << EXP;
+	unsigned int num_elements = (THREADS_PER_BLOCK * ITEMS_PER_THREAD * 8) * 8192;
 
 
         // Allocate host problem data
