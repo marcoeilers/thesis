@@ -1,42 +1,29 @@
-#include <stdio.h>
 #include <sys/time.h>
-#include "cudpp.h"
 #include "cub/block/block_radix_sort.cuh"
 #include "kernels/csrtools.cuh"
+#include "kernels/segreducecsr.cuh"
 
 
+#define BIN_BITS 12
+#define BITS 0
+#define EXP 26
+//#define START 0
+#define START (BIN_BITS - BITS)
+#define BUCKETS (1 << BIN_BITS)
 #define ITEMS_PER_THREAD 4
-#define BINS_EXP 8
-#define BINS (1 << BINS_EXP)
+
 #define THREADS_PER_BLOCK 256
 #define WORK_PER_BLOCK (ITEMS_PER_THREAD * THREADS_PER_BLOCK)
-#define BINS_PER_THREAD (BINS / THREADS_PER_BLOCK)
-#define WORK_PER_THREAD (WORK_PER_BLOCK / THREADS_PER_BLOCK)
 
+using namespace mgpu;
 
-
-void cudppMS(int blocks, int *in, int *out, size_t pitch);
-
-struct IndexValue {
-	int index;
-	int value;
-};
-
-struct LabelIndexValue {
-	int index;
-	int label;
-	int value;
-};
-
-
-
-__global__ void blockSegScan(int *values, int *labels, int *result, int *allBuckets, size_t pitch)
+__global__ void blockSegRed(int *values, int *labels, int *allBuckets)
 {
 	int tid = threadIdx.x;
 	int *ourValues = values + blockIdx.x * WORK_PER_BLOCK;
 	labels = labels + blockIdx.x * WORK_PER_BLOCK;
 	result = result + blockIdx.x * WORK_PER_BLOCK;
-	int pitchByInt = pitch / sizeof(int);
+	int *myResult = allBuckets + blockIdx.x;
 
 	typedef mgpu::CTASegScan<THREADS_PER_BLOCK, mgpu::plus<int> > SegScan;
 	typedef cub::BlockRadixSort<int, THREADS_PER_BLOCK, ITEMS_PER_THREAD, IndexValue> BlockRadixSortT;
@@ -64,7 +51,7 @@ __global__ void blockSegScan(int *values, int *labels, int *result, int *allBuck
 		myValues[i].value = ourValues[ITEMS_PER_THREAD * tid + i];
 	}
 	__syncthreads();
-	BlockRadixSortT(shared.sort).Sort(myLabels, myValues, 0, BINS_EXP);
+	BlockRadixSortT(shared.sort).Sort(myLabels, myValues, 0, BIN_BITS);
 
 	__syncthreads();
 
@@ -92,6 +79,7 @@ __global__ void blockSegScan(int *values, int *labels, int *result, int *allBuck
 	}
 
 	__syncthreads();
+//                        atomicAdd(&myResult[curInd * hists], curVal);
 
 	int carryOut;
 	for (int i = 0; i < ITEMS_PER_THREAD; i++)
@@ -102,14 +90,16 @@ __global__ void blockSegScan(int *values, int *labels, int *result, int *allBuck
 
 		if (myFlags[i] && myLabels[i] != 0)
 		{
-			allBuckets[((myLabelsPred[i]) * pitchByInt) + blockIdx.x] = (i && myLabelsPred[i] == shared.segScan.lastLabel) ? x + shared.segScan.lastValue : x;
+//			allBuckets[((myLabelsPred[i]) * pitchByInt) + blockIdx.x] = (i && myLabelsPred[i] == shared.segScan.lastLabel) ? x + shared.segScan.lastValue : x;
+			myResult[myLabelsPred[i] * hists] = (i && myLabelsPred[i] == shared.segScan.lastLabel) ? x + shared.segScan.lastValue : x;
 		}
 
 
 		__syncthreads();
 		if (threadIdx.x == (THREADS_PER_BLOCK - 1))
 		{
-                        allBuckets[((myLabels[ITEMS_PER_THREAD - 1]) * pitchByInt) + blockIdx.x] = carryOut;
+			myResult[myLabels[ITEMS_PER_THREAD - 1]] = carryOut;
+//                        allBuckets[((myLabels[ITEMS_PER_THREAD - 1]) * pitchByInt) + blockIdx.x] = carryOut;
 			shared.segScan.lastValue = carryOut;
 			shared.segScan.lastLabel = myLabels[i];
 		}
@@ -117,202 +107,154 @@ __global__ void blockSegScan(int *values, int *labels, int *result, int *allBuck
 
 }
 
-
-
-void comparePartials(int *d_indices, int *d_values, int *d_results, int *d_allBuckets, int num_elements, size_t pitch)
+void printDeviceArrays(int *d_array1, int *d_array2, int length)
 {
-int pitchByInt = pitch / sizeof(int);
-int *indices, *values, *results, *allBuckets, *cresults, *callBuckets;
-indices = (int*) malloc(num_elements * sizeof(int) * 4);
-values = indices + num_elements;
-results = values + num_elements;
-cresults = results + num_elements;
-allBuckets = (int*) malloc(pitch * BINS * 2);
-callBuckets = allBuckets + pitchByInt * BINS;
+	int *array1 = (int*) malloc(length * sizeof(int));
+	int *array2 = (int*) malloc(length * sizeof(int));
 
-cudaMemcpy(indices, d_indices, sizeof(int) * num_elements, cudaMemcpyDeviceToHost);
-cudaMemcpy(values, d_values, sizeof(int) * num_elements, cudaMemcpyDeviceToHost);
-cudaMemcpy(results, d_results, sizeof(int) * num_elements, cudaMemcpyDeviceToHost);
-cudaMemcpy(allBuckets, d_allBuckets, pitch * BINS, cudaMemcpyDeviceToHost);
+	cudaMemcpy(array1, d_array1, length * sizeof(int), cudaMemcpyDeviceToHost);
+	cudaMemcpy(array2, d_array2, length * sizeof(int), cudaMemcpyDeviceToHost);
 
-for (int i = 0; i < num_elements; i += THREADS_PER_BLOCK * ITEMS_PER_THREAD)
-{
-	int block = i / (THREADS_PER_BLOCK * ITEMS_PER_THREAD);
-
-	int *curIndices = indices + i;
-	int *curValues = values + i;
-	int *curResults = cresults + i;
-
-	for (int j = 0; j < BINS; j++)
-		callBuckets[j] = 0;
-	for (int j = 0; j < THREADS_PER_BLOCK * ITEMS_PER_THREAD; j++)
+	for (int i = 0; i < length; i++)
 	{
-		curResults[j] = callBuckets[curIndices[j]];
-		callBuckets[curIndices[j]] += curValues[j];
+		printf("index %i first array %u second array %u\n", i, array1[i], array2[i]);
 	}
 
-	for (int j = 0; j < THREADS_PER_BLOCK * ITEMS_PER_THREAD; j++)
-	{
-		if (results[i + j] != curResults[j])
-			printf("different result block %i in %i should be %i is %i, label %i\n", block, i + j, curResults[j], results[i+j], curIndices[j]);
-	}
-
-	for (int j = 0; j < BINS; j++)
-	{
-		if (callBuckets[j] != allBuckets[j * pitchByInt + block])
-			printf("different bucket block %i bin %i is %i should be %i\n", block, j, allBuckets[j * pitchByInt + block], callBuckets[j]);
-	}
-}
-
+	free(array2);
+	free(array1);
 }
 
 
-
-void invokeMultiRed(int *indices, int *values, int *results, int num_elements)
+void cpuMR(int *keys, int *values, int *result, int num_elements)
 {
-int blocks = num_elements / (ITEMS_PER_THREAD * THREADS_PER_BLOCK);
+	for (int i = 0; i < BUCKETS; i++)
+		result[i] = 0;
 
-int *allBuckets;
-int *allBucketsResult;
-size_t pitch;
-size_t pitch_result;
-cudaMallocPitch((void**)&allBuckets, &pitch, blocks * sizeof(int),  BINS);
-cudaMallocPitch((void**)&allBucketsResult, &pitch_result, blocks * sizeof(int), BINS);
-
-printf("temp memory allocation error: %i\n", cudaGetLastError());
-
-dim3 dimBlock(THREADS_PER_BLOCK, 1);
-dim3 dimGrid(blocks, 1);
-cudaFuncSetCacheConfig(blockSegScan, cudaFuncCachePreferShared);
-cudaFuncSetCacheConfig(addRemainder, cudaFuncCachePreferShared);
-
-
-timeval before, between1, between2, after;
-
-gettimeofday(&before, NULL);
-//cudaMemset(results, 0, num_elements * sizeof(int));
-cudaMemset(allBuckets, 0, pitch * BINS);
-
-//naiveGlobalSeparateMultiScan<<<blocks, THREADS_PER_BLOCK>>>(indices, values, allBuckets, pitch);
-blockSegScan<<<blocks, THREADS_PER_BLOCK>>>(values, indices, results, allBuckets, pitch);
-
-cudaThreadSynchronize();
-printf("error after blockSegScan is %i\n", cudaGetLastError());
-//comparePartials(indices, values, results, allBuckets, num_elements, pitch);
-
-gettimeofday(&between1, NULL);
-
-cudppMS(blocks, allBuckets, allBucketsResult, pitch);
-cudaThreadSynchronize();
-
-gettimeofday(&between2, NULL);
-
-cudaThreadSynchronize();
-gettimeofday(&after, NULL);
-
-float time3 = (after.tv_sec - between2.tv_sec) * 1e9 + (after.tv_usec - between2.tv_usec) * 1e3;
-float time2 = (between2.tv_sec - between1.tv_sec) * 1e9 + (between2.tv_usec - between1.tv_usec) * 1e3;
-float time1 = (between1.tv_sec - before.tv_sec) * 1e9 + (between1.tv_usec - before.tv_usec) * 1e3;
-printf("%i\t%f\t%f\t%f\t%f\n", num_elements, time1 / num_elements, time2 / num_elements, time3 / num_elements, (time1 + time2 + time3) / num_elements);
+	for (int i = 0; i < num_elements; i++)
+		result[keys[i]] += values[i]; 
 }
 
-
-void cudppMS(int blocks, int *in, int *out, size_t pitch)
+template<int START_BIT, int NO_BITS>
+std::pair<timeval, timeval> sortMR(int *h_keys, int *h_values, int *h_result, int num_elements, CudaContext &context)
 {
-// Initialize the CUDPP Library
-    CUDPPHandle theCudpp;
-    cudppCreate(&theCudpp);
+	typedef int KeyType;
+	typedef int ValueType;
+	
+	// Allocate device data. (We will let the sorting enactor create
+	// the "pong" storage if/when necessary.)
+	KeyType *d_keys;
+	ValueType *d_values;
+	int *d_result, *d_allBuckets;
+	cudaMalloc((void**) &d_keys, sizeof(KeyType) * num_elements);
+	cudaMalloc((void**) &d_values, sizeof(ValueType) * num_elements);
 
-CUDPPConfiguration config;
-    config.op = CUDPP_ADD;
-    config.datatype = CUDPP_INT;
-    config.algorithm = CUDPP_SCAN;
-    config.options = CUDPP_OPTION_FORWARD | CUDPP_OPTION_EXCLUSIVE;
-    
-    CUDPPHandle scanplan = 0;
-    CUDPPResult res = cudppPlan(theCudpp, &scanplan, config, blocks, BINS, pitch / sizeof(int));  
-    if (CUDPP_SUCCESS != res)
-    {
-        printf("Error creating CUDPPPlan\n");
-        exit(-1);
-    }
+	// Copy host data to device data
+	cudaMemcpy(d_keys, h_keys, sizeof(KeyType) * num_elements, cudaMemcpyHostToDevice);
+	cudaMemcpy(d_values, h_values, sizeof(ValueType) * num_elements, cudaMemcpyHostToDevice);
 
-// Run the scan
-    res = cudppMultiScan(scanplan, out, in, blocks, BINS);
-    if (CUDPP_SUCCESS != res)
-    {
-        printf("Error in cudppScan()\n");
-        exit(-1);
-    }
+	timeval before, between, after;
+	
+	gettimeofday(&before, NULL);
+
+	cudaThreadSynchronize();
+
+        gettimeofday(&between, NULL);
+
+	int blocks = 16 * 8;
+	int threadspb = 128;
+	int hists = blocks;
+
+	
+        cudaMalloc((void**) &d_allBuckets, sizeof(int) * BUCKETS * hists);
+
+	cudaMemset(d_allBuckets, 0, sizeof(int) * BUCKETS * hists);
+
+//__global__ void blockSegRed(int *values, int *labels, int *result, int *allBuckets, size_t pitch)
+	blockSegRed<<<blocks, threadspb>>>(d_values, d_keys, d_allBuckets);
+//        multiReduceCombine(double_buffer.d_keys[double_buffer.selector], double_buffer.d_values[double_buffer.selector], d_allBuckets, num_elements, blocks, threadspb, BUCKETS, hists);
+
+        cudaThreadSynchronize();
+
+
+        gettimeofday(&after, NULL);
+
+
+	step_iterator<int> segmentStarts(0, hists);
+
+	cudaMalloc((void**) &d_result, BUCKETS * sizeof(int));
+
+	SegReduceCsr(d_allBuckets, segmentStarts, BUCKETS * hists, BUCKETS, false, d_result, (int)0, mgpu::plus<int>(), context);
+
+	cudaMemcpy(h_result, d_result, sizeof(int) * BUCKETS, cudaMemcpyDeviceToHost);
+
+	cudaFree(d_allBuckets);
+	cudaFree(d_keys);
+	cudaFree(d_values);
+	cudaFree(d_result);
+
+	timeval result1, result2;
+	result2.tv_sec = after.tv_sec - between.tv_sec;
+	result2.tv_usec = after.tv_usec - between.tv_usec;
+	result1.tv_sec = between.tv_sec - before.tv_sec;
+	result1.tv_usec = between.tv_usec - before.tv_usec;
+	std::pair<timeval, timeval> result(result1, result2);
+	return result;
 }
-
-
-void multiScanCpu(int *indices, int *values, int *result, int num_elements)
-{
-int buckets[BINS];
-
-for (int i = 0; i < BINS; i++)
-	buckets[i] = 0;
-
-for (int i = 0; i < num_elements; i++)
-{
-//if (i == 3 * THREADS_PER_BLOCK * ITEMS_PER_THREAD) {for (int j = 0; j < BINS; j++) printf("in block 3 bucket %i should be %i\n", j, buckets[j]);}
-
-	result[i] = buckets[indices[i]];
-	buckets[indices[i]] += values[i];
-}
-}
-
-
 
 int main()
 {
-int size = 2730 *  8 * THREADS_PER_BLOCK * ITEMS_PER_THREAD; //(8 * 3 * 1024) * 2730;
-int *keys = (int*) malloc(size * sizeof(int));
-int *values = (int*) malloc(size * sizeof(int));
-int *result = (int*) malloc(size * sizeof(int));
-int *result_cpu = (int*) malloc(size * sizeof(int));
-int index = rand() % BINS; 
-for (int i = 0; i < size; i++)
-{
-	values[i] = i % 10;
-	keys[i] = rand() % BINS;
-//if (i < 5)
-//	printf("original value %i %i \n", i, values[i]);
-	result_cpu[i] = 15;
-}
+        ContextPtr contextPtr = mgpu::CreateCudaDevice(0, NULL, false);
 
-int *d_keys, *d_values, *d_results;
-cudaMalloc((void**) &d_keys, size * sizeof(int));
-cudaMalloc((void**) &d_values, size * sizeof(int));
-cudaMalloc((void**) &d_results, size * sizeof(int));
+	printf("rand max is %i\n", RAND_MAX);
+	typedef int KeyType;
+	typedef int ValueType;
 
-cudaMemcpy(d_keys, keys, size * sizeof(int), cudaMemcpyHostToDevice);
-cudaMemcpy(d_values, values, size * sizeof(int), cudaMemcpyHostToDevice);
+	unsigned int num_elements = 1 << EXP;
 
-invokeMultiScan(d_keys, d_values, d_results, size);
 
-cudaMemcpy(result, d_results, size * sizeof(int), cudaMemcpyDeviceToHost);
+        // Allocate host problem data
+	KeyType *h_keys = new KeyType[num_elements];
+	ValueType *h_values = new ValueType[num_elements];
+	int *h_result = new int[BUCKETS];
+	int *result_cpu = new int[BUCKETS];
 
-timeval before, after;
-gettimeofday(&before, NULL);
-multiScanCpu(keys, values, result_cpu, size);
-gettimeofday(&after, NULL);
+        // Initialize host problem data
+	int index = rand() % BUCKETS;
+        for (int i = 0; i < num_elements; ++i)
+        {
+//		h_keys[i] = index;
+                h_keys[i] = rand() % BUCKETS;
+                h_values[i] = rand() % 10;
+// 		if (i < 50)
+//		printf("original key value %i %i %i\n", i, h_keys[i], h_values[i]);
+        }
+	std::pair<timeval, timeval> result;
+	result = sortMR<START, BITS>(h_keys, h_values, h_result, num_elements, *contextPtr);
+	
+	cpuMR(h_keys, h_values, result_cpu, num_elements);
 
-printf("cpu needed %f ns/int \n", ((after.tv_sec - before.tv_sec) * 1e9 + (after.tv_usec - before.tv_usec) * 1e3) / size);
-int correct = 1;
-for (int i = 0; i < size; i++)
-{
-	if (result[i] != result_cpu[i])
+
+	bool correct = true;
+	for (int i = 0; i < BUCKETS; i++)
 	{
-		printf("I sense a discrepancy! %i %i %i value %i label %i\n", i, result[i], result_cpu[i], values[i], keys[i]);
-		correct = 0;
+		if (h_result[i] != result_cpu[i])
+		{
+			printf("i sense a discrepancy! %i %i %i\n", i, h_result[i], result_cpu[i]);
+			correct = false;
+		}
 	}
-//	else
-//		printf("correct!\n");
-}
-printf("correct? %i\n", correct);
-printf("last error: %i\n", cudaGetLastError());
-}
+	if (correct)
+	printf("correct result!\n");
 
+	printf("last error is %i\n", cudaGetLastError());
 
+	float time1 = result.first.tv_sec * 1e9 + result.first.tv_usec * 1e3;
+	float time2 = result.second.tv_sec * 1e9 + result.second.tv_usec * 1e3;
+	printf("%i\t%i\t%f\t%f\t%f\n", num_elements, BITS, time1 / num_elements, time2 / num_elements, (time1 + time2) / num_elements);
+
+	delete(result_cpu);
+	delete(h_keys);
+        delete(h_values);
+	delete(h_result);
+	return 0;
+}
