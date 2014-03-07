@@ -37,33 +37,16 @@ void cpuMR(int *keys, int *values, int *result, int num_elements)
 }
 
 template<typename KeyType, typename ValType>
-void simpleReduceByKey(CudaContext& context, KeyType *indices, ValType *values, ValType *result, int num_elements, int buckets, bool preprocess)
-{
-//	MGPU_MEM(int) countsDevice = context.Malloc<int>(1);
-
+void simpleReduceByKey(CudaContext& context, KeyType *indices, ValType *values, int num_elements, int buckets, int *numSegments, int *d_bucketLabels, int *d_bucketValues)
+{	
 	std::auto_ptr<ReduceByKeyPreprocessData> preprocessData;
-	int numSegments;
-//	if(preprocess) {
-		ReduceByKeyPreprocess<ValType>(num_elements, indices, 
-			(KeyType*)0, mgpu::equal_to<KeyType>(),
-			&numSegments, (int*)0, &preprocessData, context);
-//	}
 
-//	context.Start();
-	
-//	if(preprocess) {
+		ReduceByKeyPreprocess<ValType>(num_elements, indices, 
+			d_bucketLabels, mgpu::equal_to<KeyType>(),
+			numSegments, (int*)0, &preprocessData, context);
+
 		ReduceByKeyApply(*preprocessData, values, (ValType)0, 
-			mgpu::plus<ValType>(), result, context);
-/*	} else {
-		ReduceByKey(indices, values, num_elements, (ValType)0,
-			mgpu::plus<ValType>(), mgpu::equal_to<ValType>(),
-			(KeyType*)0, result,
-			(int*)0, 
-			countsDevice->get(), context);
-	}
-*/
-//	if(!preprocess)
-//		copyDtoH(buckets, countsDevice->get(), 1);
+			mgpu::plus<ValType>(), d_bucketValues, context);
 }
 
 
@@ -125,10 +108,14 @@ std::pair<timeval, timeval> sortMR(int *h_keys, int *h_values, int *h_result, in
 //	printf("\n\n\n\nkeys values after sort\n");
 //	printDeviceArrays(d_keys, double_buffer.d_values[double_buffer.selector], 50);	
 
-        cudaMalloc((void**) &d_result, sizeof(int) * BUCKETS);
+
 	ContextPtr contextPtr = CreateCudaDevice(0, NULL, false);
 	
-	simpleReduceByKey<KeyType, ValueType>(*contextPtr, keysPtr, valuesPtr, d_result, num_elements, BUCKETS, PREPROCESS);
+	cudaMalloc((void**) &d_bucketLabels, buckets * 2 * sizeof(int));
+	d_bucketValues = d_bucketLabels + buckets;
+
+	int numSegments;
+	simpleReduceByKey<KeyType, ValueType>(*contextPtr, keysPtr, valuesPtr, d_result, num_elements, BUCKETS, &numSegments, d_bucketLabels, d_bucketValues);
 
         cudaThreadSynchronize();
         gettimeofday(&after, NULL);
@@ -143,13 +130,17 @@ std::pair<timeval, timeval> sortMR(int *h_keys, int *h_values, int *h_result, in
 
 //	printf("\n\n\n\nvalues after multiReduce\n");
 //	printDeviceArrays(d_result, d_result, 100);
+	int *h_buckets = (int*) malloc(BUCKETS * sizeof(int) * 2);
+	cudaMemcpy(h_buckets, d_bucketLabels, sizeof(int) * BUCKETS * 2, cudaMemcpyDeviceToHost);
 
-	cudaMemcpy(h_result, d_result, sizeof(int) * BUCKETS, cudaMemcpyDeviceToHost);
-
-
+	for (int i = 0; i < BUCKETS; i++)
+		result[i] = 0;
+	for (int i = 0; i < numSegments; i++)
+		result[h_buckets[i]] = h_buckets[i + BUCKETS];
+	free(h_buckets);
+	cudaFree(d_bucketLabels);
 	cudaFree(d_keys);
 	cudaFree(d_values);
-	cudaFree(d_result);
 
 	timeval result1, result2;
 	result2.tv_sec = after.tv_sec - between.tv_sec;
