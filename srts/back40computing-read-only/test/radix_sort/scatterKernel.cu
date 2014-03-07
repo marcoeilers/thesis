@@ -121,39 +121,39 @@ __global__ void multiReduceCombineKernel(int *indices, int *values, int *result,
         int blockId = blockIdx.x;
         int threadId = threadIdx.x;
         int threadspb = blockDim.x;
-
+	int myHist =  blockIdx.x; //(hists * blockId / blocks);
         int todob = num_elements / blocks;
-
+//if (threadIdx.x == 0) printf("block %i, my hist is %i\n", blockIdx.x, myHist);
         int todo = todob / threadspb;
         int offset = (blockId * todob) + threadId;
 
-	int *myResult = result + (bins * (blockId / blocks));
+	int *myResult = result + myHist;
 
         int *valEnd = values + offset + (threadspb * todo);
         int *valStart = values + offset;
         int *indStart = indices + offset;
 
-	if (hists >= blocks){
+	if (false){
 		#pragma unroll 16
                 while (valStart != valEnd)
                 {
                         int curVal = *valStart;
                         int curInd = *indStart;
 
-                        myResult[curInd] += curVal; 
+                        myResult[curInd * hists] += curVal; 
 
                         valStart += threadspb;
                         indStart += threadspb;
                 }
 
 	}else{
-		#pragma unroll 16
+//		#pragma unroll 16
 	        while (valStart != valEnd)
 	        {
 	                int curVal = *valStart;
 	                int curInd = *indStart;
 	
-	                atomicAdd(&myResult[curInd], curVal);
+	                atomicAdd(&myResult[curInd * hists], curVal);
 
 	                valStart += threadspb;
 	                indStart += threadspb;

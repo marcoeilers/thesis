@@ -1,14 +1,17 @@
 #include <part_sort.cuh>
 #include <sys/time.h>
 #include "scatterKernel.cuh"
-#include "mgpuhost.cuh"
+#include "kernels/segreducecsr.cuh"
+//#include "moderngpu.cuh"
 
-#define BIN_BITS 26
+#define BIN_BITS 12
 #define BITS 0
 #define EXP 26
 //#define START 0
 #define START (BIN_BITS - BITS)
 #define BUCKETS (1 << BIN_BITS)
+
+using namespace mgpu;
 
 void printDeviceArrays(int *d_array1, int *d_array2, int length)
 {
@@ -38,7 +41,7 @@ void cpuMR(int *keys, int *values, int *result, int num_elements)
 }
 
 template<int START_BIT, int NO_BITS>
-std::pair<timeval, timeval> sortMR(int *h_keys, int *h_values, int *h_result, int num_elements)
+std::pair<timeval, timeval> sortMR(int *h_keys, int *h_values, int *h_result, int num_elements, CudaContext &context)
 {
 	typedef int KeyType;
 	typedef int ValueType;
@@ -47,7 +50,7 @@ std::pair<timeval, timeval> sortMR(int *h_keys, int *h_values, int *h_result, in
 	// the "pong" storage if/when necessary.)
 	KeyType *d_keys;
 	ValueType *d_values;
-	int *d_result;
+	int *d_result, *d_allBuckets;
 	cudaMalloc((void**) &d_keys, sizeof(KeyType) * num_elements);
 	cudaMalloc((void**) &d_values, sizeof(ValueType) * num_elements);
 
@@ -94,14 +97,20 @@ std::pair<timeval, timeval> sortMR(int *h_keys, int *h_values, int *h_result, in
 	int threadspb = 128;
 	int hists = blocks;
 
+	
         cudaMalloc((void**) &d_allBuckets, sizeof(int) * BUCKETS * hists);
-	cudaMemset(d_result, 0, sizeof(int) * BUCKETS * hists);
+//printf("error after allbuckets alloc: %i, returned %i, points to%i\n", cudaGetLastError(), error, d_allBuckets);
+	cudaMemset(d_allBuckets, 0, sizeof(int) * BUCKETS * hists);
 
 // void multiReduceCombine(int *indices, int *values, int *result, int num_elements, int blocks, int threadspb, int bins, int hists);
 
-        multiReduce(double_buffer.d_keys[double_buffer.selector], double_buffer.d_values[double_buffer.selector], d_allBuckets, num_elements, blocks, threadspb, BUCKETS, hists);
+        multiReduceCombine(double_buffer.d_keys[double_buffer.selector], double_buffer.d_values[double_buffer.selector], d_allBuckets, num_elements, blocks, threadspb, BUCKETS, hists);
 
         cudaThreadSynchronize();
+
+//printf("after kernel call error is %i\n", cudaGetLastError());
+
+//printDeviceArrays(d_allBuckets, d_allBuckets, hists * BUCKETS);
         gettimeofday(&after, NULL);
 
 	// Cleanup "pong" storage
@@ -112,23 +121,15 @@ std::pair<timeval, timeval> sortMR(int *h_keys, int *h_values, int *h_result, in
 		cudaFree(d_double_values);
 	}
 
-	mgpu::ContextPtr contextPtr = mgpu::CreateCudaDevice(0, NULL, false);
-	mgpu::step_iterator<int> segmentStarts(0, BINS);
+	step_iterator<int> segmentStarts(0, hists);
 
-/*
-template<typename InputIt, typename CsrIt, typename OutputIt, typename T,
-    typename Op>
-MGPU_HOST void SegReduceCsr(InputIt data_global, int count, CsrIt csr_global, 
-    int numSegments, bool supportEmpty, OutputIt dest_global, T identity, Op op, 
-    CudaContext& context)
-*/
-	
-	mgpu::SegReduceCsr(d_allBuckets, BINS * blocks, segmentStarts, blocks, 0, result, 0, mgpu::plus<int>(), *contextPtr);
+	cudaMalloc((void**) &d_result, BUCKETS * sizeof(int));
 
+	SegReduceCsr(d_allBuckets, segmentStarts, BUCKETS * hists, BUCKETS, false, d_result, (int)0, mgpu::plus<int>(), context);
 
 	cudaMemcpy(h_result, d_result, sizeof(int) * BUCKETS, cudaMemcpyDeviceToHost);
 
-
+	cudaFree(d_allBuckets);
 	cudaFree(d_keys);
 	cudaFree(d_values);
 	cudaFree(d_result);
@@ -144,6 +145,8 @@ MGPU_HOST void SegReduceCsr(InputIt data_global, int count, CsrIt csr_global,
 
 int main()
 {
+        ContextPtr contextPtr = mgpu::CreateCudaDevice(0, NULL, false);
+
 	printf("rand max is %i\n", RAND_MAX);
 	typedef int KeyType;
 	typedef int ValueType;
@@ -161,14 +164,14 @@ int main()
 	int index = rand() % BUCKETS;
         for (int i = 0; i < num_elements; ++i)
         {
-		h_keys[i] = index;
-//                h_keys[i] = rand() % BUCKETS;
-                h_values[i] = rand() % 100;
+//		h_keys[i] = index;
+                h_keys[i] = rand() % BUCKETS;
+                h_values[i] = rand() % 10;
 // 		if (i < 50)
 //		printf("original key value %i %i %i\n", i, h_keys[i], h_values[i]);
         }
 	std::pair<timeval, timeval> result;
-	result = sortMR<START, BITS>(h_keys, h_values, h_result, num_elements);
+	result = sortMR<START, BITS>(h_keys, h_values, h_result, num_elements, *contextPtr);
 	
 	cpuMR(h_keys, h_values, result_cpu, num_elements);
 
