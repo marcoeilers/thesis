@@ -296,21 +296,30 @@ void Bin4_None
    uint inc3 = 1u << s3;
    uint inc2 = 1u << s2;
    uint inc1 = 1u << s1;
-   
+
+   if (SHADOW > 1)
+   {   
+	if (LI_3 == LI_4)
+	   inc4 += inc3;
+	if (LI_1 == LI_2)
+	   inc2 += inc1;
+   }
    uint oldCnt, newCnt;
 
 if (SHADOW > 1)
 {
-atomicAdd(&cntPtr[LI_4], inc4);
-atomicAdd(&cntPtr[LI_3], inc3);
-atomicAdd(&cntPtr[LI_2], inc2);
-atomicAdd(&cntPtr[LI_1], inc1);
+   atomicAdd(&cntPtr[LI_4], inc4);
+   if (LI_3 != LI_4)
+	atomicAdd(&cntPtr[LI_3], inc3);
+
+   atomicAdd(&cntPtr[LI_2], inc2);
+   if (LI_1 != LI_2)
+	atomicAdd(&cntPtr[LI_1], inc1);
 }else{
    // Increment 4th bin
    oldCnt = cntPtr[LI_4];
    newCnt = oldCnt + inc4;
    cntPtr[LI_4] = newCnt;
-
 
    // Increment 3rd bin
    oldCnt = cntPtr[LI_3];
